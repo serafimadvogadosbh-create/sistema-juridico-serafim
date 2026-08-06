@@ -42,6 +42,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Usuários
     </div>
+    <div class="nav-item" data-view="integracoes" data-mod="integracoes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.6 10.5 15.4 7.5M8.6 13.5 15.4 16.5"/></svg>
+      Integrações
+    </div>
   </nav>
   <div class="sidebar-footer">
     <div class="avatar" id="avatarInitials">--</div>
@@ -122,6 +126,65 @@
       <div class="card" style="margin-top:16px;">
         <table><thead><tr><th>Data</th><th>Responsável</th><th>Atividade</th><th>Duração</th></tr></thead>
         <tbody id="timesheetTable"></tbody></table>
+      </div>
+    </section>
+
+    <section class="view" id="view-integracoes">
+      <div class="page-head"><div><h2>Integrações</h2><p>Conecte sua conta Google para enviar e-mails e anexar arquivos do Drive aos processos.</p></div></div>
+      <div class="card">
+        <div class="card-head"><h3>Google (Gmail + Drive)</h3></div>
+        <div class="card-body" id="googleStatusBody">Carregando...</div>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <div class="card-head"><h3>WhatsApp</h3></div>
+        <div class="card-body"><p style="color:var(--gray-600);font-size:13px;">Lembretes automáticos por WhatsApp ainda não configurados. Requer conta comercial verificada no Meta Business.</p></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-cliente-detalhe">
+      <div class="page-head">
+        <div><button class="btn-ghost" id="btnVoltarCliente">← Voltar</button><h2 id="clienteDetNome" style="margin-top:8px;"></h2><p id="clienteDetSub"></p></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h3>Contato</h3></div>
+          <div class="card-body">
+            <div class="field"><label>E-mail</label><input type="email" id="clienteDetEmail" placeholder="email@cliente.com"></div>
+            <div class="field"><label>Telefone / WhatsApp</label><input type="text" id="clienteDetPhone" placeholder="(31) 90000-0000"></div>
+            <button class="btn-primary" id="btnSalvarContato">Salvar contato</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Processos vinculados</h3></div>
+          <div class="card-body" id="clienteDetProcessos"></div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:16px;">
+        <div class="card">
+          <div class="card-head"><h3>Documentos (Google Drive)</h3><button class="btn-ghost" id="btnAnexarClienteDrive">+ Anexar do Drive</button></div>
+          <div class="card-body" id="clienteDetArquivos"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>E-mails</h3><button class="btn-ghost" id="btnBuscarEmails">Buscar e-mails</button></div>
+          <div class="card-body">
+            <div id="clienteDetEmails" style="margin-bottom:14px;"></div>
+            <div style="border-top:1px solid var(--gray-100);padding-top:12px;">
+              <div class="field"><label>Assunto</label><input type="text" id="emailAssunto"></div>
+              <div class="field"><label>Mensagem</label><textarea id="emailCorpo" rows="4" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;"></textarea></div>
+              <button class="btn-primary" id="btnEnviarEmail">Enviar e-mail</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-processo-detalhe">
+      <div class="page-head">
+        <div><button class="btn-ghost" id="btnVoltarProcesso">← Voltar</button><h2 id="processoDetNumero" style="margin-top:8px;"></h2><p id="processoDetSub"></p></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Documentos (Google Drive)</h3><button class="btn-ghost" id="btnAnexarProcessoDrive">+ Anexar do Drive</button></div>
+        <div class="card-body" id="processoDetArquivos"></div>
       </div>
     </section>
 
