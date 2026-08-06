@@ -359,6 +359,20 @@ async function generateDocument(userId, { tipo, cliente, advogadoNome, extra = {
   return { id: copyRes.id, name: copyRes.name, webViewLink: copyRes.webViewLink };
 }
 
+// Exporta um Google Doc (procuracao/contrato gerado) como PDF, para download
+// direto pelo usuario sem precisar abrir o Google Drive.
+async function exportPdf(userId, fileId) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application/pdf`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error('pdf_export_failed: ' + res.status);
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 module.exports = {
   isConfigured,
   buildAuthUrl,
@@ -371,4 +385,5 @@ module.exports = {
   sendEmail,
   searchEmails,
   generateDocument,
+  exportPdf,
 };

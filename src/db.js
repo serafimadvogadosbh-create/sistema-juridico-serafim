@@ -150,6 +150,7 @@ function migrate() {
   if (!cols.includes('endereco')) db.exec('ALTER TABLE clients ADD COLUMN endereco TEXT');
   if (!cols.includes('estado_civil')) db.exec('ALTER TABLE clients ADD COLUMN estado_civil TEXT');
   if (!cols.includes('profissao')) db.exec('ALTER TABLE clients ADD COLUMN profissao TEXT');
+  if (!cols.includes('archived_at')) db.exec('ALTER TABLE clients ADD COLUMN archived_at TEXT');
 }
 
 function seed() {
