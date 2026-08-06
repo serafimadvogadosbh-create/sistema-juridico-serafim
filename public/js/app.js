@@ -4,6 +4,7 @@
   const titles = {
     dashboard: 'Dashboard', processos: 'Processos', agenda: 'Agenda & Tarefas',
     clientes: 'Clientes', financeiro: 'Financeiro', timesheet: 'Timesheet', usuarios: 'Usuários',
+    integracoes: 'Integrações',
   };
   const ROLE_LABEL = { socio: 'Sócio(a)', advogado: 'Advogado(a)', estagiario: 'Estagiário(a)' };
   const STATUS_TAG = {
@@ -57,6 +58,13 @@
     if (name === 'financeiro') return loadFinanceiro();
     if (name === 'timesheet') return loadTimesheet();
     if (name === 'usuarios') return loadUsuarios();
+    if (name === 'integracoes') return loadIntegracoes();
+  }
+
+  function showDetail(id) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   }
 
   async function loadUsuarios() {
@@ -105,12 +113,15 @@
     const d = await api('/api/processos');
     document.getElementById('processosSub').textContent = `${d.processos.length} processo(s) visível(is) para o seu perfil`;
     document.getElementById('processosTable').innerHTML = d.processos.map(p => `
-      <tr>
+      <tr class="clickable-row" data-id="${p.id}">
         <td class="mono">${p.cnj_number}</td><td>${p.client_name}</td><td>${p.opposing_party || '—'}</td>
         <td>${p.area || '—'}</td><td>${p.phase || '—'}</td><td>${fmtDate(p.next_deadline)}</td>
         <td>${p.responsible_name}</td><td>${tag(p.status)}</td>
       </tr>
     `).join('') || '<tr><td colspan="8">Nenhum processo encontrado.</td></tr>';
+    document.querySelectorAll('#processosTable tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', () => openProcessoDetalhe(Number(tr.dataset.id)));
+    });
   }
 
   async function loadAgenda() {
@@ -131,8 +142,11 @@
     const d = await api('/api/clientes');
     document.getElementById('clientesSub').textContent = `${d.clientes.length} cliente(s) cadastrado(s)`;
     document.getElementById('clientesTable').innerHTML = d.clientes.map(c => `
-      <tr><td>${c.name}</td><td>${c.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física'}</td><td>${c.since || '—'}</td></tr>
+      <tr class="clickable-row" data-id="${c.id}"><td>${c.name}</td><td>${c.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física'}</td><td>${c.since || '—'}</td></tr>
     `).join('') || '<tr><td colspan="3">Nenhum cliente.</td></tr>';
+    document.querySelectorAll('#clientesTable tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', () => openClienteDetalhe(Number(tr.dataset.id)));
+    });
   }
 
   async function loadFinanceiro() {
@@ -228,6 +242,8 @@
       <h3>Novo cliente</h3>
       <div class="field"><label>Nome</label><input id="mName" type="text"></div>
       <div class="field"><label>Tipo</label><select id="mType"><option value="PF">Pessoa física</option><option value="PJ">Pessoa jurídica</option></select></div>
+      <div class="field"><label>E-mail (opcional)</label><input id="mEmail" type="email"></div>
+      <div class="field"><label>Telefone / WhatsApp (opcional)</label><input id="mPhone" type="text"></div>
       <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button></div>
     `;
     backdrop.classList.add('active');
@@ -235,7 +251,13 @@
     document.getElementById('mSave').onclick = async () => {
       const name = document.getElementById('mName').value.trim();
       if (!name) return;
-      await api('/api/clientes', { method: 'POST', body: JSON.stringify({ name, type: document.getElementById('mType').value }) });
+      await api('/api/clientes', {
+        method: 'POST', body: JSON.stringify({
+          name, type: document.getElementById('mType').value,
+          email: document.getElementById('mEmail').value.trim(),
+          phone: document.getElementById('mPhone').value.trim(),
+        })
+      });
       closeModal();
       loadView('clientes');
     };
@@ -300,6 +322,203 @@
     };
   }
 
+  // ---------- Integrações Google ----------
+  async function loadIntegracoes() {
+    const el = document.getElementById('googleStatusBody');
+    el.innerHTML = 'Carregando...';
+    const s = await api('/api/google/status');
+    if (!s.configured) {
+      el.innerHTML = `<p style="color:var(--gray-600);font-size:13px;">Integração ainda não configurada pelo administrador do sistema (faltam as credenciais do Google no servidor).</p>`;
+      return;
+    }
+    if (s.connected) {
+      el.innerHTML = `
+        <p style="font-size:13px;margin-bottom:12px;">Conectado como <b>${s.email}</b>.</p>
+        <button class="btn-ghost" id="btnGoogleDisconnect">Desconectar</button>
+      `;
+      document.getElementById('btnGoogleDisconnect').addEventListener('click', async () => {
+        await api('/api/google/disconnect', { method: 'POST' });
+        loadIntegracoes();
+      });
+    } else {
+      el.innerHTML = `
+        <p style="font-size:13px;margin-bottom:12px;">Conecte sua conta Google para enviar e-mails e anexar documentos do Drive.</p>
+        <a class="btn-primary" style="display:inline-block;text-decoration:none;" href="/auth/google/connect">Conectar Google</a>
+      `;
+    }
+  }
+
+  function showGoogleQueryBanner() {
+    const params = new URLSearchParams(window.location.search);
+    const content = document.querySelector('.content');
+    if (params.get('google_conectado')) {
+      const b = document.createElement('div');
+      b.className = 'banner ok';
+      b.textContent = 'Conta Google conectada com sucesso.';
+      content.prepend(b);
+      setTimeout(() => b.remove(), 5000);
+    }
+    if (params.get('google_erro')) {
+      const b = document.createElement('div');
+      b.className = 'banner err';
+      b.textContent = 'Não foi possível conectar ao Google (' + params.get('google_erro') + ').';
+      content.prepend(b);
+      setTimeout(() => b.remove(), 6000);
+    }
+    if (params.get('google_conectado') || params.get('google_erro')) {
+      window.history.replaceState({}, '', '/app');
+    }
+  }
+
+  // ---------- Detalhe de Cliente ----------
+  let currentClienteId = null;
+
+  async function openClienteDetalhe(id) {
+    currentClienteId = id;
+    showDetail('view-cliente-detalhe');
+    document.getElementById('pageTitle').textContent = 'Cliente';
+    const d = await api('/api/clientes/' + id);
+    document.getElementById('clienteDetNome').textContent = d.cliente.name;
+    document.getElementById('clienteDetSub').textContent = (d.cliente.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física') + ' · cliente desde ' + (d.cliente.since || '—');
+    document.getElementById('clienteDetEmail').value = d.cliente.email || '';
+    document.getElementById('clienteDetPhone').value = d.cliente.phone || '';
+    document.getElementById('clienteDetProcessos').innerHTML = d.processos.map(p => `
+      <div class="agenda-item"><div class="agenda-text"><b class="mono">${p.cnj_number}</b><span>${p.phase || '—'} · ${fmtDate(p.next_deadline)} · ${p.responsible_name}</span></div></div>
+    `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum processo vinculado.</p>';
+    renderArquivos('clienteDetArquivos', d.arquivos);
+    document.getElementById('clienteDetEmails').innerHTML = '<p style="color:var(--gray-600);font-size:13px;">Clique em "Buscar e-mails" para sincronizar com o Gmail.</p>';
+  }
+
+  function renderArquivos(elId, arquivos) {
+    document.getElementById(elId).innerHTML = arquivos.map(f => `
+      <div class="file-item">
+        <span>📄 ${f.name}</span>
+        <a href="${f.link}" target="_blank" rel="noopener">abrir</a>
+      </div>
+    `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum documento anexado.</p>';
+  }
+
+  document.getElementById('btnVoltarCliente').addEventListener('click', () => showView('clientes'));
+
+  document.getElementById('btnSalvarContato').addEventListener('click', async () => {
+    const email = document.getElementById('clienteDetEmail').value.trim();
+    const phone = document.getElementById('clienteDetPhone').value.trim();
+    await api('/api/clientes/' + currentClienteId, { method: 'PATCH', body: JSON.stringify({ email, phone }) });
+    alert('Contato salvo.');
+  });
+
+  document.getElementById('btnBuscarEmails').addEventListener('click', async () => {
+    const box = document.getElementById('clienteDetEmails');
+    box.innerHTML = 'Buscando...';
+    try {
+      const d = await api('/api/gmail/log?client_id=' + currentClienteId);
+      if (d.aviso === 'cliente_sem_email') {
+        box.innerHTML = '<p style="color:var(--gray-600);font-size:13px;">Cadastre o e-mail do cliente para buscar mensagens.</p>';
+        return;
+      }
+      box.innerHTML = d.emails.map(e => `
+        <div class="email-item"><b>${e.subject}</b><span>${e.from} → ${e.to} · ${e.date}</span><div>${e.snippet}</div></div>
+      `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum e-mail encontrado.</p>';
+    } catch (err) {
+      box.innerHTML = err.message === 'google_nao_conectado'
+        ? '<p style="color:var(--red);font-size:13px;">Conecte sua conta Google em "Integrações" primeiro.</p>'
+        : '<p style="color:var(--red);font-size:13px;">Falha ao buscar e-mails.</p>';
+    }
+  });
+
+  document.getElementById('btnEnviarEmail').addEventListener('click', async () => {
+    const subject = document.getElementById('emailAssunto').value.trim();
+    const body = document.getElementById('emailCorpo').value.trim();
+    if (!subject || !body) return;
+    try {
+      await api('/api/gmail/send', { method: 'POST', body: JSON.stringify({ client_id: currentClienteId, subject, body }) });
+      document.getElementById('emailAssunto').value = '';
+      document.getElementById('emailCorpo').value = '';
+      alert('E-mail enviado.');
+    } catch (err) {
+      if (err.message === 'google_nao_conectado') alert('Conecte sua conta Google em "Integrações" primeiro.');
+      else if (err.message === 'cliente_sem_email') alert('Cadastre o e-mail do cliente antes de enviar.');
+      else alert('Não foi possível enviar o e-mail.');
+    }
+  });
+
+  document.getElementById('btnAnexarClienteDrive').addEventListener('click', () => openDrivePicker({ client_id: currentClienteId }, 'clienteDetArquivos'));
+
+  // ---------- Detalhe de Processo ----------
+  let currentProcessoId = null;
+
+  async function openProcessoDetalhe(id) {
+    currentProcessoId = id;
+    showDetail('view-processo-detalhe');
+    document.getElementById('pageTitle').textContent = 'Processo';
+    const d = await api('/api/processos/' + id);
+    document.getElementById('processoDetNumero').textContent = d.processo.cnj_number;
+    document.getElementById('processoDetSub').textContent = `${d.processo.client_name} · ${d.processo.phase || '—'} · responsável: ${d.processo.responsible_name}`;
+    renderArquivos('processoDetArquivos', d.arquivos);
+  }
+
+  document.getElementById('btnVoltarProcesso').addEventListener('click', () => showView('processos'));
+  document.getElementById('btnAnexarProcessoDrive').addEventListener('click', () => openDrivePicker({ process_id: currentProcessoId }, 'processoDetArquivos'));
+
+  // ---------- Google Drive Picker ----------
+  let gapiLoaded = false;
+  function loadGapiScript() {
+    return new Promise((resolve, reject) => {
+      if (gapiLoaded) return resolve();
+      const script = document.createElement('script');
+      script.src = 'https://apis.google.com/js/api.js';
+      script.onload = () => {
+        gapi.load('picker', () => { gapiLoaded = true; resolve(); });
+      };
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function openDrivePicker(target, refreshElId) {
+    let tokenInfo;
+    try {
+      tokenInfo = await api('/api/google/picker-token');
+    } catch (err) {
+      alert('Conecte sua conta Google em "Integrações" antes de anexar arquivos do Drive.');
+      return;
+    }
+    if (!tokenInfo.apiKey) {
+      alert('A chave de API do Google Picker ainda não foi configurada pelo administrador (GOOGLE_PICKER_API_KEY).');
+      return;
+    }
+    try {
+      await loadGapiScript();
+    } catch {
+      alert('Não foi possível carregar o seletor de arquivos do Google.');
+      return;
+    }
+    const view = new google.picker.DocsView().setIncludeFolders(true);
+    const picker = new google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(tokenInfo.accessToken)
+      .setDeveloperKey(tokenInfo.apiKey)
+      .setCallback(async (data) => {
+        if (data.action !== google.picker.Action.PICKED) return;
+        for (const doc of data.docs) {
+          await api('/api/drive/attach', {
+            method: 'POST',
+            body: JSON.stringify({
+              ...target,
+              google_file_id: doc.id,
+              name: doc.name,
+              mime_type: doc.mimeType,
+              link: doc.url,
+            }),
+          });
+        }
+        if (target.client_id) openClienteDetalhe(target.client_id);
+        else if (target.process_id) openProcessoDetalhe(target.process_id);
+      })
+      .build();
+    picker.setVisible(true);
+  }
+
   // ---------- Init ----------
   async function init() {
     try {
@@ -338,6 +557,7 @@
         loadTimesheet();
       });
 
+      showGoogleQueryBanner();
       const firstMod = me.modules[0] || 'dashboard';
       showView(firstMod);
     } catch (e) {
