@@ -147,6 +147,7 @@
     renderKanbanColumn('colEmAndamento', 'countEmAndamento', cols.em_andamento);
     renderKanbanColumn('colConcluido', 'countConcluido', cols.concluido);
     bindKanbanDnD();
+    bindKanbanActions();
   }
 
   function renderKanbanColumn(elId, countId, cards) {
@@ -162,6 +163,11 @@
           <span>${fmtDate(c.event_date)}${c.event_time ? ' · ' + c.event_time : ''}</span>
           ${c.client_name ? `<span>· ${escapeHtml(c.client_name)}</span>` : ''}
           ${c.google_event_id ? '<span class="kcard-gcal" title="Sincronizado com o Google Agenda">📅</span>' : ''}
+        </div>
+        <div class="kcard-actions">
+          ${c.status !== 'em_andamento' ? `<button class="kcard-btn" data-action="em_andamento" data-id="${c.id}">Em andamento</button>` : ''}
+          ${c.status !== 'concluido' ? `<button class="kcard-btn kcard-btn-ok" data-action="concluido" data-id="${c.id}">Concluído</button>` : ''}
+          <button class="kcard-btn" data-action="reagendar" data-id="${c.id}">Reagendar</button>
         </div>
       </div>
     `).join('') || '<p class="kanban-empty">Nenhum card.</p>';
@@ -197,6 +203,90 @@
     });
   }
 
+  // Botões de acao rapida no card: Em andamento / Concluido (PATCH status)
+  // e Reagendar (abre mini-modal so com data/hora).
+  function bindKanbanActions() {
+    document.querySelectorAll('.kcard-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = Number(btn.dataset.id);
+        const action = btn.dataset.action;
+        const card = AGENDA_CARDS.find(c => c.id === id);
+        if (!card) return;
+        if (action === 'reagendar') {
+          openReagendarModal(card);
+          return;
+        }
+        btn.disabled = true;
+        try {
+          await api(`/api/agenda/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: action }) });
+          loadAgenda();
+        } catch {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  function openReagendarModal(card) {
+    modalBox.innerHTML = `
+      <h3>Reagendar</h3>
+      <p style="font-size:12.5px;color:var(--gray-600);margin-bottom:10px;">${escapeHtml(card.title)}</p>
+      <div class="field"><label>Nova data</label><input id="rDate" type="date" value="${card.event_date || ''}"></div>
+      <div class="field"><label>Nova hora (deixe em branco para dia inteiro)</label><input id="rTime" type="time" value="${card.event_time || ''}"></div>
+      <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button></div>
+      <div id="mErr" style="color:var(--red);font-size:12.5px;margin-top:8px;"></div>
+    `;
+    backdrop.classList.add('active');
+    document.getElementById('mCancel').onclick = closeModal;
+    document.getElementById('mSave').onclick = async () => {
+      const event_date = document.getElementById('rDate').value;
+      if (!event_date) {
+        document.getElementById('mErr').textContent = 'Escolha uma data.';
+        return;
+      }
+      const event_time = document.getElementById('rTime').value;
+      const btn = document.getElementById('mSave');
+      btn.disabled = true;
+      try {
+        await api('/api/agenda/' + card.id, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            title: card.title,
+            detail: card.detail || '',
+            type: card.type,
+            priority: card.priority,
+            event_date,
+            event_time,
+            location: card.location || '',
+            client_id: card.client_id || null,
+            process_id: card.process_id || null,
+          }),
+        });
+        closeModal();
+        loadAgenda();
+      } catch (e) {
+        document.getElementById('mErr').textContent = 'Não foi possível reagendar.';
+        btn.disabled = false;
+      }
+    };
+  }
+
+  // Monta assunto/corpo padrao do e-mail de atualizacao para o cliente,
+  // a partir dos dados do card (editavel antes de enviar).
+  function buildEmailTemplate(card) {
+    const typeLabel = (AGENDA_TYPE_LABEL[card.type] || card.type).toLowerCase();
+    const statusLabel = card.status === 'concluido' ? 'concluído(a)' : (card.status === 'em_andamento' ? 'em andamento' : 'pendente');
+    const dataTxt = card.event_date ? fmtDate(card.event_date) + (card.event_time ? ' às ' + card.event_time : '') : '';
+    const subject = `Atualização — ${card.title}`;
+    let body = `Prezado(a) ${card.client_name || 'cliente'},\n\n`;
+    body += `Informamos uma atualização sobre ${typeLabel} "${card.title}": está atualmente ${statusLabel}.\n\n`;
+    if (dataTxt) body += `Data: ${dataTxt}${card.location ? ' — ' + card.location : ''}\n\n`;
+    if (card.detail) body += `Observações: ${card.detail}\n\n`;
+    body += `Qualquer dúvida, estamos à disposição.\n\nAtenciosamente,\nSerafim Advogados`;
+    return { subject, body };
+  }
+
   async function openCardModal(card) {
     const isEdit = Boolean(card);
     const [clientes, processos] = await Promise.all([
@@ -219,6 +309,17 @@
       <div class="field"><label>Processo (opcional)</label><select id="mProcess"><option value="">—</option>${processos.map(p => `<option value="${p.id}">${escapeHtml(p.cnj_number)} — ${escapeHtml(p.client_name)}</option>`).join('')}</select></div>
       <div class="field"><label>Descrição</label><textarea id="mDetail" rows="3" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;">${isEdit ? escapeHtml(card.detail || '') : ''}</textarea></div>
       <p style="font-size:11.5px;color:var(--gray-600);margin-bottom:6px;">Se a conta Google do escritório estiver conectada, este card também é criado/atualizado no Google Agenda, com lembrete por e-mail 1 dia antes.</p>
+      ${isEdit && card.client_id ? `
+      <div class="field">
+        <button class="btn-ghost" id="mOpenEmail" type="button">✉️ Enviar atualização por e-mail ao cliente</button>
+      </div>
+      <div id="emailBox" style="display:none;border-top:1px solid var(--gray-200);margin-top:4px;padding-top:10px;">
+        <div class="field"><label>Assunto</label><input id="rEmailSubject" type="text"></div>
+        <div class="field"><label>Mensagem</label><textarea id="rEmailBody" rows="6" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;"></textarea></div>
+        <div class="modal-actions"><button class="btn-ghost" id="mCancelEmail" type="button">Fechar</button><button class="btn-primary" id="mSendEmail" type="button">Enviar</button></div>
+        <div id="mEmailMsg" style="font-size:12.5px;margin-top:6px;"></div>
+      </div>
+      ` : ''}
       <div class="modal-actions">
         ${isEdit ? '<button class="btn-ghost" id="mDelete" style="color:#c0392b;border-color:#c0392b;margin-right:auto;">Excluir</button>' : ''}
         <button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button>
@@ -237,6 +338,42 @@
         closeModal();
         loadAgenda();
       };
+      if (card.client_id) {
+        document.getElementById('mOpenEmail').onclick = () => {
+          const tpl = buildEmailTemplate(card);
+          document.getElementById('rEmailSubject').value = tpl.subject;
+          document.getElementById('rEmailBody').value = tpl.body;
+          document.getElementById('emailBox').style.display = 'block';
+          document.getElementById('mOpenEmail').style.display = 'none';
+        };
+        document.getElementById('mCancelEmail').onclick = () => {
+          document.getElementById('emailBox').style.display = 'none';
+          document.getElementById('mOpenEmail').style.display = '';
+        };
+        document.getElementById('mSendEmail').onclick = async () => {
+          const subject = document.getElementById('rEmailSubject').value.trim();
+          const body = document.getElementById('rEmailBody').value.trim();
+          const msgEl = document.getElementById('mEmailMsg');
+          if (!subject || !body) {
+            msgEl.style.color = 'var(--red)';
+            msgEl.textContent = 'Preencha assunto e mensagem.';
+            return;
+          }
+          const sendBtn = document.getElementById('mSendEmail');
+          sendBtn.disabled = true;
+          try {
+            await api('/api/gmail/send', { method: 'POST', body: JSON.stringify({ client_id: card.client_id, subject, body }) });
+            msgEl.style.color = 'var(--green)';
+            msgEl.textContent = 'E-mail enviado.';
+          } catch (err) {
+            msgEl.style.color = 'var(--red)';
+            msgEl.textContent = err.message === 'google_nao_conectado'
+              ? 'Conecte sua conta Google em "Integrações" primeiro.'
+              : (err.message === 'cliente_sem_email' ? 'Cadastre o e-mail do cliente antes de enviar.' : 'Não foi possível enviar o e-mail.');
+          }
+          sendBtn.disabled = false;
+        };
+      }
     } else {
       document.getElementById('mType').value = 'tarefa';
       document.getElementById('mPriority').value = 'media';
