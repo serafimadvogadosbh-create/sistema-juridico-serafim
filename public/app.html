@@ -91,12 +91,22 @@
     </section>
 
     <section class="view" id="view-agenda">
-      <div class="page-head"><div><h2>Agenda &amp; Tarefas</h2><p>Compromissos e pendências.</p></div>
-        <button class="btn-primary" id="btnNovaTarefa">+ Nova tarefa</button>
+      <div class="page-head"><div><h2>Agenda &amp; Tarefas</h2><p>Prazos, audiências e tarefas em um quadro. Cards com data ficam sincronizados com o Google Agenda do escritório, com lembrete por e-mail 1 dia antes.</p></div>
+        <button class="btn-primary" id="btnNovoCard">+ Novo card</button>
       </div>
-      <div class="grid-2">
-        <div class="card"><div class="card-head"><h3>Compromissos</h3></div><div class="card-body" id="agendaList"></div></div>
-        <div class="card"><div class="card-head"><h3>Tarefas</h3></div><div class="card-body" id="tarefasList"></div></div>
+      <div class="kanban-board">
+        <div class="kanban-col" data-status="a_fazer">
+          <div class="kanban-col-head"><span>A Fazer</span><span class="kanban-count" id="countAFazer">0</span></div>
+          <div class="kanban-col-body" id="colAFazer"></div>
+        </div>
+        <div class="kanban-col" data-status="em_andamento">
+          <div class="kanban-col-head"><span>Em Andamento</span><span class="kanban-count" id="countEmAndamento">0</span></div>
+          <div class="kanban-col-body" id="colEmAndamento"></div>
+        </div>
+        <div class="kanban-col" data-status="concluido">
+          <div class="kanban-col-head"><span>Concluído</span><span class="kanban-count" id="countConcluido">0</span></div>
+          <div class="kanban-col-body" id="colConcluido"></div>
+        </div>
       </div>
     </section>
 
