@@ -9,8 +9,16 @@ const url = require('node:url');
 const { db, init } = require('./src/db');
 const { hashPassword, verifyPassword, newSessionToken } = require('./src/auth');
 const perms = require('./src/permissions');
+const google = require('./src/google');
 
 init();
+
+// estado CSRF do fluxo OAuth (curta duracao, nao precisa persistir em disco)
+const oauthStates = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of oauthStates) if (v.expires < now) oauthStates.delete(k);
+}, 5 * 60 * 1000).unref();
 
 const PORT = process.env.PORT || 3000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 horas
@@ -53,6 +61,10 @@ function readJsonBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+function parsed_query(req) {
+  return Object.fromEntries(new url.URL(req.url, 'http://localhost').searchParams);
 }
 
 function sendJson(res, status, obj) {
@@ -212,7 +224,7 @@ async function handleApi(req, res, pathname, method) {
   }
 
   if (pathname === '/api/clientes' && method === 'GET') {
-    const rows = db.prepare('SELECT id, name, type, since FROM clients ORDER BY name ASC').all();
+    const rows = db.prepare('SELECT id, name, type, since, email, phone FROM clients ORDER BY name ASC').all();
     return sendJson(res, 200, { clientes: rows });
   }
 
@@ -220,11 +232,39 @@ async function handleApi(req, res, pathname, method) {
     if (session.role === 'estagiario') return sendJson(res, 403, { error: 'sem_permissao' });
     let body;
     try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
-    const { name, type } = body || {};
+    const { name, type, email, phone } = body || {};
     if (!name || !type) return sendJson(res, 400, { error: 'campos_obrigatorios' });
-    const info = db.prepare('INSERT INTO clients (name, type, since, owner_id) VALUES (?, ?, ?, ?)')
-      .run(name, type, String(new Date().getFullYear()), session.id);
+    const info = db.prepare('INSERT INTO clients (name, type, since, owner_id, email, phone) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(name, type, String(new Date().getFullYear()), session.id, email || null, phone || null);
     return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
+  }
+
+  const clienteDetailMatch = pathname.match(/^\/api\/clientes\/(\d+)$/);
+  if (clienteDetailMatch && method === 'GET') {
+    const id = Number(clienteDetailMatch[1]);
+    const cliente = db.prepare('SELECT id, name, type, since, email, phone FROM clients WHERE id = ?').get(id);
+    if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
+    const processos = db.prepare(`
+      SELECT p.id, p.cnj_number, p.phase, p.next_deadline, p.status, u.name as responsible_name
+      FROM processes p JOIN users u ON u.id = p.responsible_id
+      WHERE p.client_id = ? ORDER BY p.next_deadline ASC
+    `).all(id);
+    const arquivos = db.prepare(`
+      SELECT id, google_file_id, name, mime_type, link, added_at FROM drive_files
+      WHERE client_id = ? ORDER BY added_at DESC
+    `).all(id);
+    return sendJson(res, 200, { cliente, processos, arquivos });
+  }
+
+  const clienteUpdateMatch = pathname.match(/^\/api\/clientes\/(\d+)$/);
+  if (clienteUpdateMatch && method === 'PATCH') {
+    if (session.role === 'estagiario') return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(clienteUpdateMatch[1]);
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { email, phone } = body || {};
+    db.prepare('UPDATE clients SET email = ?, phone = ? WHERE id = ?').run(email || null, phone || null, id);
+    return sendJson(res, 200, { ok: true });
   }
 
   if (pathname === '/api/agenda' && method === 'GET') {
@@ -319,6 +359,116 @@ async function handleApi(req, res, pathname, method) {
     return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
   }
 
+  const processoDetailMatch = pathname.match(/^\/api\/processos\/(\d+)$/);
+  if (processoDetailMatch && method === 'GET') {
+    const id = Number(processoDetailMatch[1]);
+    const processo = db.prepare(`
+      SELECT p.*, c.name as client_name, c.email as client_email, u.name as responsible_name
+      FROM processes p JOIN clients c ON c.id = p.client_id JOIN users u ON u.id = p.responsible_id
+      WHERE p.id = ?
+    `).get(id);
+    if (!processo) return sendJson(res, 404, { error: 'nao_encontrado' });
+    if (!perms.canSeeAllProcesses(session.role) && processo.responsible_id !== session.id) {
+      return sendJson(res, 403, { error: 'sem_permissao' });
+    }
+    const arquivos = db.prepare(`
+      SELECT id, google_file_id, name, mime_type, link, added_at FROM drive_files
+      WHERE process_id = ? ORDER BY added_at DESC
+    `).all(id);
+    return sendJson(res, 200, { processo, arquivos });
+  }
+
+  // ---------- Google: status / conexao ----------
+  if (pathname === '/api/google/status' && method === 'GET') {
+    const row = google.getStoredTokens(session.id);
+    return sendJson(res, 200, {
+      configured: google.isConfigured(),
+      connected: Boolean(row),
+      email: row ? row.google_email : null,
+    });
+  }
+
+  if (pathname === '/api/google/disconnect' && method === 'POST') {
+    google.disconnect(session.id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (pathname === '/api/google/picker-token' && method === 'GET') {
+    try {
+      const accessToken = await google.getValidAccessToken(session.id);
+      if (!accessToken) return sendJson(res, 409, { error: 'google_nao_conectado' });
+      return sendJson(res, 200, { accessToken, apiKey: process.env.GOOGLE_PICKER_API_KEY || '', clientId: process.env.GOOGLE_CLIENT_ID || '' });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'falha_google', detail: String(e.message || e) });
+    }
+  }
+
+  // ---------- Gmail ----------
+  if (pathname === '/api/gmail/send' && method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { client_id, subject, body: text } = body || {};
+    const cliente = db.prepare('SELECT * FROM clients WHERE id = ?').get(client_id);
+    if (!cliente || !cliente.email) return sendJson(res, 400, { error: 'cliente_sem_email' });
+    try {
+      await google.sendEmail(session.id, { to: cliente.email, subject, body: text });
+      db.prepare(`
+        INSERT INTO email_log (client_id, subject, snippet, from_addr, to_addr, email_date, direction, synced_by)
+        VALUES (?, ?, ?, ?, ?, datetime('now'), 'enviado', ?)
+      `).run(client_id, subject, (text || '').slice(0, 200), session.email, cliente.email, session.id);
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (msg.includes('google_nao_conectado')) return sendJson(res, 409, { error: 'google_nao_conectado' });
+      return sendJson(res, 500, { error: 'falha_envio', detail: msg });
+    }
+  }
+
+  if (pathname === '/api/gmail/log' && method === 'GET') {
+    const clientId = Number(parsed_query(req).client_id);
+    if (!clientId) return sendJson(res, 400, { error: 'client_id_obrigatorio' });
+    const cliente = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+    if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
+    if (!cliente.email) return sendJson(res, 200, { emails: [], aviso: 'cliente_sem_email' });
+    try {
+      const emails = await google.searchEmails(session.id, cliente.email);
+      const insert = db.prepare(`
+        INSERT OR IGNORE INTO email_log (client_id, gmail_message_id, subject, snippet, from_addr, to_addr, email_date, direction, synced_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const m of emails) {
+        const direction = (m.from || '').toLowerCase().includes(cliente.email.toLowerCase()) ? 'recebido' : 'enviado';
+        insert.run(clientId, m.id, m.subject, m.snippet, m.from, m.to, m.date, direction, session.id);
+      }
+      return sendJson(res, 200, { emails });
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (msg.includes('google_nao_conectado')) return sendJson(res, 409, { error: 'google_nao_conectado' });
+      return sendJson(res, 500, { error: 'falha_busca', detail: msg });
+    }
+  }
+
+  // ---------- Drive ----------
+  if (pathname === '/api/drive/attach' && method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { process_id, client_id, google_file_id, name, mime_type, link } = body || {};
+    if (!google_file_id || !name || (!process_id && !client_id)) {
+      return sendJson(res, 400, { error: 'campos_obrigatorios' });
+    }
+    const info = db.prepare(`
+      INSERT INTO drive_files (process_id, client_id, google_file_id, name, mime_type, link, added_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(process_id || null, client_id || null, google_file_id, name, mime_type || '', link || '', session.id);
+    return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
+  }
+
+  const driveDeleteMatch = pathname.match(/^\/api\/drive\/files\/(\d+)$/);
+  if (driveDeleteMatch && method === 'DELETE') {
+    db.prepare('DELETE FROM drive_files WHERE id = ?').run(Number(driveDeleteMatch[1]));
+    return sendJson(res, 200, { ok: true });
+  }
+
   const deactivateMatch = pathname.match(/^\/api\/usuarios\/(\d+)\/desativar$/);
   if (deactivateMatch && method === 'PATCH') {
     if (!perms.canManageUsers(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
@@ -341,6 +491,44 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname.startsWith('/api/')) {
       return await handleApi(req, res, pathname, method);
+    }
+
+    if (pathname === '/auth/google/connect') {
+      const session = getSession(req);
+      if (!session) { res.writeHead(302, { Location: '/' }); return res.end(); }
+      if (!google.isConfigured()) {
+        res.writeHead(302, { Location: '/app?google_erro=nao_configurado' });
+        return res.end();
+      }
+      const state = newSessionToken();
+      oauthStates.set(state, { userId: session.id, expires: Date.now() + 10 * 60 * 1000 });
+      res.writeHead(302, { Location: google.buildAuthUrl(state) });
+      return res.end();
+    }
+
+    if (pathname === '/auth/google/callback') {
+      const q = parsed_query(req);
+      const stateEntry = q.state ? oauthStates.get(q.state) : null;
+      if (!stateEntry || stateEntry.expires < Date.now()) {
+        res.writeHead(302, { Location: '/app?google_erro=estado_invalido' });
+        return res.end();
+      }
+      oauthStates.delete(q.state);
+      if (q.error || !q.code) {
+        res.writeHead(302, { Location: '/app?google_erro=' + encodeURIComponent(q.error || 'sem_codigo') });
+        return res.end();
+      }
+      try {
+        const tokens = await google.exchangeCode(q.code);
+        const userinfo = await google.fetchUserInfo(tokens.access_token);
+        google.saveTokens(stateEntry.userId, tokens, userinfo.email);
+        res.writeHead(302, { Location: '/app?google_conectado=1' });
+        return res.end();
+      } catch (e) {
+        console.error(e);
+        res.writeHead(302, { Location: '/app?google_erro=falha_conexao' });
+        return res.end();
+      }
     }
 
     if (pathname === '/app' || pathname === '/app.html') {
