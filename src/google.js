@@ -22,7 +22,7 @@ const SCOPES = [
 const ESCRITORIO = {
   nome: process.env.ESCRITORIO_NOME || 'Serafim Advogados',
   oabUf: process.env.ESCRITORIO_OAB_UF || 'MG',
-  oabNumero: process.env.ESCRITORIO_OAB_NUMERO || '[OAB — preencher]',
+  oabNumero: process.env.ESCRITORIO_OAB_NUMERO || '196.089',
   endereco: process.env.ESCRITORIO_ENDERECO || '[endereço do escritório — preencher]',
   cidade: process.env.ESCRITORIO_CIDADE || 'Belo Horizonte/MG',
 };
