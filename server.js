@@ -181,7 +181,7 @@ async function handleApi(req, res, pathname, method) {
     const deadlineSoon = all
       ? db.prepare(`SELECT COUNT(*) c FROM processes WHERE next_deadline BETWEEN date('now') AND date('now','+5 day')`).get().c
       : db.prepare(`SELECT COUNT(*) c FROM processes WHERE next_deadline BETWEEN date('now') AND date('now','+5 day') AND responsible_id = ?`).get(session.id).c;
-    const tasksToday = db.prepare(`SELECT COUNT(*) c FROM tasks WHERE user_id = ? AND done = 0`).get(session.id).c;
+    const tasksToday = db.prepare(`SELECT COUNT(*) c FROM agenda_events WHERE user_id = ? AND type = 'tarefa' AND status != 'concluido'`).get(session.id).c;
     let faturamentoMes = null;
     if (perms.canAccessFinanceiro(session.role)) {
       const row = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE due_date >= date('now','start of month')`).get();
@@ -349,37 +349,117 @@ async function handleApi(req, res, pathname, method) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // ---------- Agenda & Tarefas: quadro Kanban (prazos, audiencias, tarefas, reunioes) ----------
+  const AGENDA_TYPES = ['prazo', 'audiencia', 'tarefa', 'reuniao', 'outro'];
+  const AGENDA_PRIORITIES = ['baixa', 'media', 'alta', 'urgente'];
+  const AGENDA_STATUSES = ['a_fazer', 'em_andamento', 'concluido'];
+
+  // Sincroniza (best-effort) um card do quadro com o Google Agenda do escritorio.
+  // Usa sempre a conta Google conectada pelo escritorio (nao a do usuario que
+  // criou o card), conforme o modelo de agenda unica adotado. Falhas de sync
+  // (Google desconectado, token expirado etc.) nao impedem o card de ser salvo
+  // localmente — apenas ficam registradas no log do servidor.
+  async function syncAgendaEventToGoogle(row) {
+    const googleUserId = google.getPrimaryConnectedUserId();
+    if (!googleUserId) return null;
+    const payload = {
+      title: row.title,
+      detail: row.detail,
+      date: row.event_date,
+      time: row.event_time || null,
+      location: row.location,
+      allDay: !row.event_time,
+    };
+    try {
+      if (row.google_event_id) {
+        await google.updateCalendarEvent(googleUserId, row.google_event_id, payload);
+        return row.google_event_id;
+      }
+      return await google.createCalendarEvent(googleUserId, payload);
+    } catch (e) {
+      console.error('falha ao sincronizar com Google Agenda:', e.message || e);
+      return row.google_event_id || null;
+    }
+  }
+
   if (pathname === '/api/agenda' && method === 'GET') {
     const all = session.role === 'socio';
     const rows = db.prepare(`
-      SELECT id, title, detail, event_date, event_time FROM agenda_events
-      ${all ? '' : 'WHERE user_id = ?'}
-      ORDER BY event_date ASC, event_time ASC
+      SELECT a.id, a.title, a.detail, a.type, a.priority, a.status, a.event_date, a.event_time,
+             a.location, a.client_id, cl.name AS client_name, a.process_id, a.google_event_id, a.user_id
+      FROM agenda_events a
+      LEFT JOIN clients cl ON cl.id = a.client_id
+      ${all ? '' : 'WHERE a.user_id = ?'}
+      ORDER BY a.event_date ASC, a.event_time ASC
     `).all(...(all ? [] : [session.id]));
     return sendJson(res, 200, { agenda: rows });
   }
 
-  if (pathname === '/api/tarefas' && method === 'GET') {
-    const rows = db.prepare('SELECT id, title, due_date, done FROM tasks WHERE user_id = ? ORDER BY done ASC, due_date ASC').all(session.id);
-    return sendJson(res, 200, { tarefas: rows });
-  }
-
-  if (pathname === '/api/tarefas' && method === 'POST') {
+  if (pathname === '/api/agenda' && method === 'POST') {
     let body;
     try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
-    const { title, due_date } = body || {};
-    if (!title) return sendJson(res, 400, { error: 'titulo_obrigatorio' });
-    const info = db.prepare('INSERT INTO tasks (title, due_date, done, user_id) VALUES (?, ?, 0, ?)')
-      .run(title, due_date || null, session.id);
-    return sendJson(res, 201, { id: Number(info.lastInsertRowid) });
+    const { title, detail, type, priority, event_date, event_time, location, client_id, process_id } = body || {};
+    if (!title || !event_date) return sendJson(res, 400, { error: 'campos_obrigatorios' });
+    const finalType = AGENDA_TYPES.includes(type) ? type : 'tarefa';
+    const finalPriority = AGENDA_PRIORITIES.includes(priority) ? priority : 'media';
+    const info = db.prepare(`
+      INSERT INTO agenda_events (title, detail, event_date, event_time, user_id, process_id, type, priority, status, client_id, location)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'a_fazer', ?, ?)
+    `).run(title, detail || '', event_date, event_time || '', session.id, process_id || null, finalType, finalPriority, client_id || null, location || '');
+    const id = Number(info.lastInsertRowid);
+    const googleEventId = await syncAgendaEventToGoogle({ title, detail, event_date, event_time, location, google_event_id: null });
+    if (googleEventId) db.prepare('UPDATE agenda_events SET google_event_id = ? WHERE id = ?').run(googleEventId, id);
+    return sendJson(res, 201, { id, googleSynced: Boolean(googleEventId) });
   }
 
-  const toggleMatch = pathname.match(/^\/api\/tarefas\/(\d+)\/toggle$/);
-  if (toggleMatch && method === 'PATCH') {
-    const id = Number(toggleMatch[1]);
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
-    if (!task || task.user_id !== session.id) return sendJson(res, 404, { error: 'nao_encontrado' });
-    db.prepare('UPDATE tasks SET done = ? WHERE id = ?').run(task.done ? 0 : 1, id);
+  const agendaStatusMatch = pathname.match(/^\/api\/agenda\/(\d+)\/status$/);
+  if (agendaStatusMatch && method === 'PATCH') {
+    const id = Number(agendaStatusMatch[1]);
+    const row = db.prepare('SELECT * FROM agenda_events WHERE id = ?').get(id);
+    if (!row || (row.user_id !== session.id && session.role !== 'socio')) return sendJson(res, 404, { error: 'nao_encontrado' });
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { status } = body || {};
+    if (!AGENDA_STATUSES.includes(status)) return sendJson(res, 400, { error: 'status_invalido' });
+    db.prepare('UPDATE agenda_events SET status = ? WHERE id = ?').run(status, id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const agendaUpdateMatch = pathname.match(/^\/api\/agenda\/(\d+)$/);
+  if (agendaUpdateMatch && method === 'PATCH') {
+    const id = Number(agendaUpdateMatch[1]);
+    const row = db.prepare('SELECT * FROM agenda_events WHERE id = ?').get(id);
+    if (!row || (row.user_id !== session.id && session.role !== 'socio')) return sendJson(res, 404, { error: 'nao_encontrado' });
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { title, detail, type, priority, event_date, event_time, location, client_id, process_id } = body || {};
+    if (!title || !event_date) return sendJson(res, 400, { error: 'campos_obrigatorios' });
+    const finalType = AGENDA_TYPES.includes(type) ? type : row.type;
+    const finalPriority = AGENDA_PRIORITIES.includes(priority) ? priority : row.priority;
+    db.prepare(`
+      UPDATE agenda_events SET title = ?, detail = ?, event_date = ?, event_time = ?, type = ?, priority = ?, location = ?, client_id = ?, process_id = ?
+      WHERE id = ?
+    `).run(title, detail || '', event_date, event_time || '', finalType, finalPriority, location || '', client_id || null, process_id || null, id);
+    const googleEventId = await syncAgendaEventToGoogle({ title, detail, event_date, event_time, location, google_event_id: row.google_event_id });
+    if (googleEventId && googleEventId !== row.google_event_id) {
+      db.prepare('UPDATE agenda_events SET google_event_id = ? WHERE id = ?').run(googleEventId, id);
+    }
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const agendaDeleteMatch = pathname.match(/^\/api\/agenda\/(\d+)$/);
+  if (agendaDeleteMatch && method === 'DELETE') {
+    const id = Number(agendaDeleteMatch[1]);
+    const row = db.prepare('SELECT * FROM agenda_events WHERE id = ?').get(id);
+    if (!row || (row.user_id !== session.id && session.role !== 'socio')) return sendJson(res, 404, { error: 'nao_encontrado' });
+    if (row.google_event_id) {
+      const googleUserId = google.getPrimaryConnectedUserId();
+      if (googleUserId) {
+        try { await google.deleteCalendarEvent(googleUserId, row.google_event_id); }
+        catch (e) { console.error('falha ao remover evento do Google Agenda:', e.message || e); }
+      }
+    }
+    db.prepare('DELETE FROM agenda_events WHERE id = ?').run(id);
     return sendJson(res, 200, { ok: true });
   }
 
