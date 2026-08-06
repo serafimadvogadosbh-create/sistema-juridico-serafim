@@ -228,6 +228,35 @@ async function handleApi(req, res, pathname, method) {
     return sendJson(res, 200, { clientes: rows });
   }
 
+  if (pathname === '/api/google/documentos/gerar' && method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { client_id, tipo, objeto, valor_honorarios, forma_pagamento } = body || {};
+    if (!client_id || !['procuracao', 'contrato'].includes(tipo)) {
+      return sendJson(res, 400, { error: 'campos_obrigatorios' });
+    }
+    const cliente = db.prepare('SELECT * FROM clients WHERE id = ?').get(client_id);
+    if (!cliente) return sendJson(res, 404, { error: 'cliente_nao_encontrado' });
+    try {
+      const doc = await google.generateDocument(session.id, {
+        tipo,
+        cliente,
+        advogadoNome: session.name,
+        extra: { objeto, valor_honorarios, forma_pagamento },
+      });
+      const info = db.prepare(`
+        INSERT INTO drive_files (client_id, google_file_id, name, mime_type, link, added_by)
+        VALUES (?, ?, ?, 'application/vnd.google-apps.document', ?, ?)
+      `).run(client_id, doc.id, doc.name, doc.webViewLink || '', session.id);
+      return sendJson(res, 201, { id: Number(info.lastInsertRowid), google_file_id: doc.id, name: doc.name, link: doc.webViewLink });
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (msg.includes('google_nao_conectado')) return sendJson(res, 409, { error: 'google_nao_conectado' });
+      console.error(e);
+      return sendJson(res, 500, { error: 'falha_geracao', detail: msg });
+    }
+  }
+
   if (pathname === '/api/clientes' && method === 'POST') {
     if (session.role === 'estagiario') return sendJson(res, 403, { error: 'sem_permissao' });
     let body;
@@ -242,7 +271,10 @@ async function handleApi(req, res, pathname, method) {
   const clienteDetailMatch = pathname.match(/^\/api\/clientes\/(\d+)$/);
   if (clienteDetailMatch && method === 'GET') {
     const id = Number(clienteDetailMatch[1]);
-    const cliente = db.prepare('SELECT id, name, type, since, email, phone FROM clients WHERE id = ?').get(id);
+    const cliente = db.prepare(`
+      SELECT id, name, type, since, email, phone, cpf_cnpj, rg, endereco, estado_civil, profissao
+      FROM clients WHERE id = ?
+    `).get(id);
     if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
     const processos = db.prepare(`
       SELECT p.id, p.cnj_number, p.phase, p.next_deadline, p.status, u.name as responsible_name
@@ -262,8 +294,11 @@ async function handleApi(req, res, pathname, method) {
     const id = Number(clienteUpdateMatch[1]);
     let body;
     try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
-    const { email, phone } = body || {};
-    db.prepare('UPDATE clients SET email = ?, phone = ? WHERE id = ?').run(email || null, phone || null, id);
+    const { email, phone, cpf_cnpj, rg, endereco, estado_civil, profissao } = body || {};
+    db.prepare(`
+      UPDATE clients SET email = ?, phone = ?, cpf_cnpj = ?, rg = ?, endereco = ?, estado_civil = ?, profissao = ?
+      WHERE id = ?
+    `).run(email || null, phone || null, cpf_cnpj || null, rg || null, endereco || null, estado_civil || null, profissao || null, id);
     return sendJson(res, 200, { ok: true });
   }
 
