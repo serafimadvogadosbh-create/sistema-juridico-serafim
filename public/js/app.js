@@ -382,6 +382,16 @@
     document.getElementById('clienteDetSub').textContent = (d.cliente.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física') + ' · cliente desde ' + (d.cliente.since || '—');
     document.getElementById('clienteDetEmail').value = d.cliente.email || '';
     document.getElementById('clienteDetPhone').value = d.cliente.phone || '';
+    document.getElementById('clienteDetCpfCnpj').value = d.cliente.cpf_cnpj || '';
+    document.getElementById('clienteDetRg').value = d.cliente.rg || '';
+    document.getElementById('clienteDetEndereco').value = d.cliente.endereco || '';
+    document.getElementById('clienteDetEstadoCivil').value = d.cliente.estado_civil || '';
+    document.getElementById('clienteDetProfissao').value = d.cliente.profissao || '';
+    const isPJ = d.cliente.type === 'PJ';
+    document.getElementById('clienteDetCpfLabel').textContent = isPJ ? 'CNPJ' : 'CPF';
+    document.getElementById('clienteDetRgField').style.display = isPJ ? 'none' : '';
+    document.getElementById('clienteDetEstadoCivilField').style.display = isPJ ? 'none' : '';
+    document.getElementById('clienteDetProfissaoField').style.display = isPJ ? 'none' : '';
     document.getElementById('clienteDetProcessos').innerHTML = d.processos.map(p => `
       <div class="agenda-item"><div class="agenda-text"><b class="mono">${p.cnj_number}</b><span>${p.phase || '—'} · ${fmtDate(p.next_deadline)} · ${p.responsible_name}</span></div></div>
     `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum processo vinculado.</p>';
@@ -403,9 +413,65 @@
   document.getElementById('btnSalvarContato').addEventListener('click', async () => {
     const email = document.getElementById('clienteDetEmail').value.trim();
     const phone = document.getElementById('clienteDetPhone').value.trim();
-    await api('/api/clientes/' + currentClienteId, { method: 'PATCH', body: JSON.stringify({ email, phone }) });
+    const cpf_cnpj = document.getElementById('clienteDetCpfCnpj').value.trim();
+    const rg = document.getElementById('clienteDetRg').value.trim();
+    const endereco = document.getElementById('clienteDetEndereco').value.trim();
+    const estado_civil = document.getElementById('clienteDetEstadoCivil').value.trim();
+    const profissao = document.getElementById('clienteDetProfissao').value.trim();
+    await api('/api/clientes/' + currentClienteId, {
+      method: 'PATCH',
+      body: JSON.stringify({ email, phone, cpf_cnpj, rg, endereco, estado_civil, profissao }),
+    });
     alert('Contato salvo.');
   });
+
+  // ---------- Geração de documentos (Procuração / Contrato) ----------
+  function openGerarDocumentoModal(tipo) {
+    const titulo = tipo === 'contrato' ? 'Gerar Contrato de Prestação de Serviços' : 'Gerar Procuração';
+    modalBox.innerHTML = `
+      <h3>${titulo}</h3>
+      <div class="field"><label>Objeto${tipo === 'contrato' ? ' do contrato' : ' da procuração'}</label>
+        <textarea id="mObjeto" rows="3" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;" placeholder="${tipo === 'contrato' ? 'Ex.: patrocínio da ação de cobrança nº...' : 'Ex.: representação judicial e extrajudicial em geral'}"></textarea></div>
+      ${tipo === 'contrato' ? `
+      <div class="field"><label>Valor dos honorários</label><input id="mValor" type="text" placeholder="Ex.: R$ 5.000,00"></div>
+      <div class="field"><label>Forma de pagamento</label><input id="mForma" type="text" placeholder="Ex.: à vista, em 3 parcelas..."></div>
+      ` : ''}
+      <p style="font-size:11.5px;color:var(--gray-600);margin-bottom:6px;">O documento será gerado a partir de um modelo padrão e salvo no Google Drive do escritório.</p>
+      <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Gerar</button></div>
+      <div id="mErr" style="color:var(--red);font-size:12.5px;margin-top:8px;"></div>
+    `;
+    backdrop.classList.add('active');
+    document.getElementById('mCancel').onclick = closeModal;
+    document.getElementById('mSave').onclick = async () => {
+      const btn = document.getElementById('mSave');
+      btn.disabled = true;
+      btn.textContent = 'Gerando...';
+      try {
+        await api('/api/google/documentos/gerar', {
+          method: 'POST',
+          body: JSON.stringify({
+            client_id: currentClienteId,
+            tipo,
+            objeto: document.getElementById('mObjeto').value.trim(),
+            valor_honorarios: document.getElementById('mValor') ? document.getElementById('mValor').value.trim() : '',
+            forma_pagamento: document.getElementById('mForma') ? document.getElementById('mForma').value.trim() : '',
+          }),
+        });
+        closeModal();
+        openClienteDetalhe(currentClienteId);
+      } catch (err) {
+        const msg = err.message === 'google_nao_conectado'
+          ? 'Conecte sua conta Google em "Integrações" primeiro.'
+          : 'Não foi possível gerar o documento. Tente novamente.';
+        document.getElementById('mErr').textContent = msg;
+        btn.disabled = false;
+        btn.textContent = 'Gerar';
+      }
+    };
+  }
+
+  document.getElementById('btnGerarProcuracao').addEventListener('click', () => openGerarDocumentoModal('procuracao'));
+  document.getElementById('btnGerarContrato').addEventListener('click', () => openGerarDocumentoModal('contrato'));
 
   document.getElementById('btnBuscarEmails').addEventListener('click', async () => {
     const box = document.getElementById('clienteDetEmails');
