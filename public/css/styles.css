@@ -141,6 +141,12 @@ tbody tr:hover{background:var(--gray-50);}
 .kcard-title{font-size:13px;font-weight:600;color:var(--gray-800);margin-bottom:5px;line-height:1.35;}
 .kcard-meta{font-size:11.5px;color:var(--gray-600);display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
 .kcard-gcal{color:var(--blue-600);}
+.kcard-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--gray-100);}
+.kcard-btn{background:#fff;border:1px solid var(--gray-200);color:var(--gray-700);font-size:11px;font-weight:600;padding:4px 9px;border-radius:6px;cursor:pointer;transition:background .12s,border-color .12s;}
+.kcard-btn:hover{background:var(--gray-100);}
+.kcard-btn:disabled{opacity:.5;cursor:default;}
+.kcard-btn-ok{color:var(--green);border-color:var(--green);}
+.kcard-btn-ok:hover{background:#e5f7ef;}
 .kanban-empty{color:var(--gray-600);font-size:12px;padding:6px 2px;}
 
 @media(max-width:1080px){.kpi-grid{grid-template-columns:repeat(2,1fr);} .grid-2{grid-template-columns:1fr;} .kanban-board{grid-template-columns:1fr;}}
