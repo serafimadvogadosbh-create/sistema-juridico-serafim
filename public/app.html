@@ -102,7 +102,10 @@
 
     <section class="view" id="view-clientes">
       <div class="page-head"><div><h2>Clientes</h2><p id="clientesSub"></p></div>
-        <button class="btn-primary" id="btnNovoCliente">+ Novo cliente</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-ghost" id="btnVerArquivados">Ver arquivados</button>
+          <button class="btn-primary" id="btnNovoCliente">+ Novo cliente</button>
+        </div>
       </div>
       <div class="card"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Cliente desde</th></tr></thead>
       <tbody id="clientesTable"></tbody></table></div>
@@ -144,6 +147,10 @@
     <section class="view" id="view-cliente-detalhe">
       <div class="page-head">
         <div><button class="btn-ghost" id="btnVoltarCliente">← Voltar</button><h2 id="clienteDetNome" style="margin-top:8px;"></h2><p id="clienteDetSub"></p></div>
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+          <button class="btn-ghost" id="btnArquivarCliente">Arquivar cliente</button>
+          <button class="btn-ghost" id="btnExcluirCliente" style="color:#c0392b;border-color:#c0392b;">Excluir cliente</button>
+        </div>
       </div>
       <div class="grid-2">
         <div class="card">
