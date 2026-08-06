@@ -138,12 +138,16 @@
     bindTaskToggles();
   }
 
+  let showingArquivados = false;
+
   async function loadClientes() {
-    const d = await api('/api/clientes');
-    document.getElementById('clientesSub').textContent = `${d.clientes.length} cliente(s) cadastrado(s)`;
+    const d = await api('/api/clientes' + (showingArquivados ? '?arquivados=1' : ''));
+    document.getElementById('clientesSub').textContent = showingArquivados
+      ? `${d.clientes.length} cliente(s) arquivado(s)`
+      : `${d.clientes.length} cliente(s) cadastrado(s)`;
     document.getElementById('clientesTable').innerHTML = d.clientes.map(c => `
-      <tr class="clickable-row" data-id="${c.id}"><td>${c.name}</td><td>${c.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física'}</td><td>${c.since || '—'}</td></tr>
-    `).join('') || '<tr><td colspan="3">Nenhum cliente.</td></tr>';
+      <tr class="clickable-row" data-id="${c.id}"><td>${c.name}${showingArquivados ? ' <span class="tag gray">arquivado</span>' : ''}</td><td>${c.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física'}</td><td>${c.since || '—'}</td></tr>
+    `).join('') || `<tr><td colspan="3">Nenhum cliente${showingArquivados ? ' arquivado' : ''}.</td></tr>`;
     document.querySelectorAll('#clientesTable tr[data-id]').forEach(tr => {
       tr.addEventListener('click', () => openClienteDetalhe(Number(tr.dataset.id)));
     });
@@ -379,7 +383,22 @@
     document.getElementById('pageTitle').textContent = 'Cliente';
     const d = await api('/api/clientes/' + id);
     document.getElementById('clienteDetNome').textContent = d.cliente.name;
-    document.getElementById('clienteDetSub').textContent = (d.cliente.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física') + ' · cliente desde ' + (d.cliente.since || '—');
+    document.getElementById('clienteDetSub').textContent = (d.cliente.type === 'PJ' ? 'Pessoa jurídica' : 'Pessoa física') + ' · cliente desde ' + (d.cliente.since || '—') + (d.cliente.archived_at ? ' · ARQUIVADO' : '');
+    const btnArquivar = document.getElementById('btnArquivarCliente');
+    if (d.cliente.archived_at) {
+      btnArquivar.textContent = 'Restaurar cliente';
+      btnArquivar.onclick = async () => {
+        await api('/api/clientes/' + id + '/restaurar', { method: 'PATCH' });
+        openClienteDetalhe(id);
+      };
+    } else {
+      btnArquivar.textContent = 'Arquivar cliente';
+      btnArquivar.onclick = async () => {
+        if (!confirm('Arquivar este cliente? Ele deixará de aparecer na lista de clientes ativos, mas todos os dados são preservados e podem ser restaurados depois.')) return;
+        await api('/api/clientes/' + id + '/arquivar', { method: 'PATCH' });
+        showView('clientes');
+      };
+    }
     document.getElementById('clienteDetEmail').value = d.cliente.email || '';
     document.getElementById('clienteDetPhone').value = d.cliente.phone || '';
     document.getElementById('clienteDetCpfCnpj').value = d.cliente.cpf_cnpj || '';
@@ -403,12 +422,32 @@
     document.getElementById(elId).innerHTML = arquivos.map(f => `
       <div class="file-item">
         <span>📄 ${f.name}</span>
-        <a href="${f.link}" target="_blank" rel="noopener">abrir</a>
+        <span>
+          ${f.mime_type === 'application/vnd.google-apps.document' ? `<a href="/api/drive/files/${f.id}/pdf">baixar PDF</a> · ` : ''}
+          <a href="${f.link}" target="_blank" rel="noopener">abrir</a>
+        </span>
       </div>
     `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum documento anexado.</p>';
   }
 
   document.getElementById('btnVoltarCliente').addEventListener('click', () => showView('clientes'));
+
+  document.getElementById('btnExcluirCliente').addEventListener('click', async () => {
+    if (!confirm('Excluir este cliente PERMANENTEMENTE? Essa ação não pode ser desfeita. Só é possível se não houver processos nem faturas vinculados a ele.')) return;
+    try {
+      await api('/api/clientes/' + currentClienteId, { method: 'DELETE' });
+      alert('Cliente excluído.');
+      showView('clientes');
+    } catch (err) {
+      if (err.message === 'cliente_possui_vinculos') {
+        alert('Não é possível excluir: este cliente possui processos e/ou faturas vinculados. Arquive o cliente em vez de excluir, ou remova esses vínculos primeiro.');
+      } else if (err.message === 'sem_permissao') {
+        alert('Apenas o sócio pode excluir clientes permanentemente.');
+      } else {
+        alert('Não foi possível excluir o cliente.');
+      }
+    }
+  });
 
   document.getElementById('btnSalvarContato').addEventListener('click', async () => {
     const email = document.getElementById('clienteDetEmail').value.trim();
@@ -447,7 +486,7 @@
       btn.disabled = true;
       btn.textContent = 'Gerando...';
       try {
-        await api('/api/google/documentos/gerar', {
+        const result = await api('/api/google/documentos/gerar', {
           method: 'POST',
           body: JSON.stringify({
             client_id: currentClienteId,
@@ -459,6 +498,14 @@
         });
         closeModal();
         openClienteDetalhe(currentClienteId);
+        if (result && result.pdfUrl) {
+          const a = document.createElement('a');
+          a.href = result.pdfUrl;
+          a.rel = 'noopener';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        }
       } catch (err) {
         const msg = err.message === 'google_nao_conectado'
           ? 'Conecte sua conta Google em "Integrações" primeiro.'
@@ -611,6 +658,17 @@
       document.getElementById('btnNovoProcesso').addEventListener('click', openProcessModal);
       document.getElementById('btnNovoCliente').addEventListener('click', openClientModal);
       document.getElementById('btnChangePassword').addEventListener('click', openChangePasswordModal);
+
+      document.getElementById('btnVerArquivados').addEventListener('click', () => {
+        showingArquivados = !showingArquivados;
+        document.getElementById('btnVerArquivados').textContent = showingArquivados ? 'Ver ativos' : 'Ver arquivados';
+        loadClientes();
+      });
+
+      const btnExcluirCliente = document.getElementById('btnExcluirCliente');
+      if (btnExcluirCliente) btnExcluirCliente.style.display = me.user.role === 'socio' ? '' : 'none';
+      const btnArquivarCliente = document.getElementById('btnArquivarCliente');
+      if (btnArquivarCliente) btnArquivarCliente.style.display = me.user.role === 'estagiario' ? 'none' : '';
       const btnNovoUsuario = document.getElementById('btnNovoUsuario');
       if (btnNovoUsuario) btnNovoUsuario.addEventListener('click', openUserModal);
       document.getElementById('btnAddTimesheet').addEventListener('click', async () => {
