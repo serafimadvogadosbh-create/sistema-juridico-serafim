@@ -224,7 +224,12 @@ async function handleApi(req, res, pathname, method) {
   }
 
   if (pathname === '/api/clientes' && method === 'GET') {
-    const rows = db.prepare('SELECT id, name, type, since, email, phone FROM clients ORDER BY name ASC').all();
+    const showArchived = parsed_query(req).arquivados === '1';
+    const rows = db.prepare(`
+      SELECT id, name, type, since, email, phone, archived_at FROM clients
+      WHERE archived_at IS ${showArchived ? 'NOT' : ''} NULL
+      ORDER BY name ASC
+    `).all();
     return sendJson(res, 200, { clientes: rows });
   }
 
@@ -248,7 +253,14 @@ async function handleApi(req, res, pathname, method) {
         INSERT INTO drive_files (client_id, google_file_id, name, mime_type, link, added_by)
         VALUES (?, ?, ?, 'application/vnd.google-apps.document', ?, ?)
       `).run(client_id, doc.id, doc.name, doc.webViewLink || '', session.id);
-      return sendJson(res, 201, { id: Number(info.lastInsertRowid), google_file_id: doc.id, name: doc.name, link: doc.webViewLink });
+      const fileRowId = Number(info.lastInsertRowid);
+      return sendJson(res, 201, {
+        id: fileRowId,
+        google_file_id: doc.id,
+        name: doc.name,
+        link: doc.webViewLink,
+        pdfUrl: `/api/drive/files/${fileRowId}/pdf`,
+      });
     } catch (e) {
       const msg = String(e.message || e);
       if (msg.includes('google_nao_conectado')) return sendJson(res, 409, { error: 'google_nao_conectado' });
@@ -272,7 +284,7 @@ async function handleApi(req, res, pathname, method) {
   if (clienteDetailMatch && method === 'GET') {
     const id = Number(clienteDetailMatch[1]);
     const cliente = db.prepare(`
-      SELECT id, name, type, since, email, phone, cpf_cnpj, rg, endereco, estado_civil, profissao
+      SELECT id, name, type, since, email, phone, cpf_cnpj, rg, endereco, estado_civil, profissao, archived_at
       FROM clients WHERE id = ?
     `).get(id);
     if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
@@ -299,6 +311,41 @@ async function handleApi(req, res, pathname, method) {
       UPDATE clients SET email = ?, phone = ?, cpf_cnpj = ?, rg = ?, endereco = ?, estado_civil = ?, profissao = ?
       WHERE id = ?
     `).run(email || null, phone || null, cpf_cnpj || null, rg || null, endereco || null, estado_civil || null, profissao || null, id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const clienteArchiveMatch = pathname.match(/^\/api\/clientes\/(\d+)\/arquivar$/);
+  if (clienteArchiveMatch && method === 'PATCH') {
+    if (session.role === 'estagiario') return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(clienteArchiveMatch[1]);
+    const cliente = db.prepare('SELECT id FROM clients WHERE id = ?').get(id);
+    if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
+    db.prepare(`UPDATE clients SET archived_at = datetime('now') WHERE id = ?`).run(id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const clienteRestoreMatch = pathname.match(/^\/api\/clientes\/(\d+)\/restaurar$/);
+  if (clienteRestoreMatch && method === 'PATCH') {
+    if (session.role === 'estagiario') return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(clienteRestoreMatch[1]);
+    const cliente = db.prepare('SELECT id FROM clients WHERE id = ?').get(id);
+    if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
+    db.prepare('UPDATE clients SET archived_at = NULL WHERE id = ?').run(id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  const clienteDeleteMatch = pathname.match(/^\/api\/clientes\/(\d+)$/);
+  if (clienteDeleteMatch && method === 'DELETE') {
+    if (session.role !== 'socio') return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(clienteDeleteMatch[1]);
+    const cliente = db.prepare('SELECT id FROM clients WHERE id = ?').get(id);
+    if (!cliente) return sendJson(res, 404, { error: 'nao_encontrado' });
+    const processosCount = db.prepare('SELECT COUNT(*) c FROM processes WHERE client_id = ?').get(id).c;
+    const invoicesCount = db.prepare('SELECT COUNT(*) c FROM invoices WHERE client_id = ?').get(id).c;
+    if (processosCount > 0 || invoicesCount > 0) {
+      return sendJson(res, 409, { error: 'cliente_possui_vinculos', processos: processosCount, faturas: invoicesCount });
+    }
+    db.prepare('DELETE FROM clients WHERE id = ?').run(id);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -502,6 +549,29 @@ async function handleApi(req, res, pathname, method) {
   if (driveDeleteMatch && method === 'DELETE') {
     db.prepare('DELETE FROM drive_files WHERE id = ?').run(Number(driveDeleteMatch[1]));
     return sendJson(res, 200, { ok: true });
+  }
+
+  // Exporta um documento gerado (Google Doc) como PDF para download direto,
+  // sem que o usuario precise abrir o Google Drive.
+  const drivePdfMatch = pathname.match(/^\/api\/drive\/files\/(\d+)\/pdf$/);
+  if (drivePdfMatch && method === 'GET') {
+    const id = Number(drivePdfMatch[1]);
+    const row = db.prepare('SELECT * FROM drive_files WHERE id = ?').get(id);
+    if (!row) return sendJson(res, 404, { error: 'nao_encontrado' });
+    try {
+      const buffer = await google.exportPdf(session.id, row.google_file_id);
+      const safeName = String(row.name || 'documento').replace(/["\r\n]/g, '');
+      res.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${safeName}.pdf"; filename*=UTF-8''${encodeURIComponent(safeName)}.pdf`,
+      });
+      return res.end(buffer);
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (msg.includes('google_nao_conectado')) return sendJson(res, 409, { error: 'google_nao_conectado' });
+      console.error(e);
+      return sendJson(res, 500, { error: 'falha_exportar_pdf', detail: msg });
+    }
   }
 
   const deactivateMatch = pathname.match(/^\/api\/usuarios\/(\d+)\/desativar$/);
