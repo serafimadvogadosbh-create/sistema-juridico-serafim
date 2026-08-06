@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Entrar | Sistema Jurídico</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="box">A</div>
+      <div class="txt">Sistema Jurídico</div>
+    </div>
+    <h2>Acesse sua conta</h2>
+    <p class="sub">Use o e-mail e a senha cadastrados pelo administrador do escritório.</p>
+    <div class="login-error" id="loginError"></div>
+    <form id="loginForm">
+      <div class="field">
+        <label>E-mail</label>
+        <input type="email" id="email" required autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Senha</label>
+        <input type="password" id="password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="login-btn">Entrar</button>
+    </form>
+    <div class="login-hint">
+      Acesso restrito a usuários cadastrados pelo escritório. Em caso de dúvida sobre sua senha, contate o administrador do sistema.
+    </div>
+  </div>
+</div>
+<script>
+  const form = document.getElementById('loginForm');
+  const errorBox = document.getElementById('loginError');
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    errorBox.style.display = 'none';
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    try{
+      const r = await fetch('/api/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({email, password})
+      });
+      const data = await r.json();
+      if(!r.ok){
+        errorBox.textContent = data.error === 'credenciais_invalidas' ? 'E-mail ou senha incorretos.' : 'Não foi possível entrar. Tente novamente.';
+        errorBox.style.display = 'block';
+        return;
+      }
+      window.location.href = '/app';
+    }catch(err){
+      errorBox.textContent = 'Erro de conexão. Tente novamente.';
+      errorBox.style.display = 'block';
+    }
+  });
+</script>
+</body>
+</html>

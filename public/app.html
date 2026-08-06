@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema Jurídico</title>
+<link rel="stylesheet" href="/css/styles.css">
+</head>
+<body class="app">
+
+<aside class="sidebar">
+  <div class="brand">
+    <div class="logo">A</div>
+    <div class="name">Sistema Jurídico</div>
+  </div>
+  <nav class="nav" id="nav">
+    <div class="nav-item" data-view="dashboard" data-mod="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+      Dashboard
+    </div>
+    <div class="nav-item" data-view="processos" data-mod="processos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+      Processos
+    </div>
+    <div class="nav-item" data-view="agenda" data-mod="agenda">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      Agenda &amp; Tarefas
+    </div>
+    <div class="nav-item" data-view="clientes" data-mod="clientes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+      Clientes
+    </div>
+    <div class="nav-item" data-view="financeiro" data-mod="financeiro">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      Financeiro
+    </div>
+    <div class="nav-item" data-view="timesheet" data-mod="timesheet">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      Timesheet
+    </div>
+    <div class="nav-item" data-view="usuarios" data-mod="usuarios">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Usuários
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="avatar" id="avatarInitials">--</div>
+    <div class="who"><b id="whoName">Carregando...</b><small id="whoRole"></small></div>
+  </div>
+  <div style="padding:0 16px 16px;display:flex;gap:8px;">
+    <button class="logout-btn" id="btnChangePassword" style="flex:1;">Trocar senha</button>
+    <button class="logout-btn" id="logoutBtn" style="flex:1;">Sair</button>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar"><h1 id="pageTitle">Dashboard</h1></div>
+  <div class="content">
+
+    <section class="view" id="view-dashboard">
+      <div class="page-head"><div><h2 id="greeting">Olá 👋</h2><p>Resumo do escritório para hoje.</p></div></div>
+      <div class="kpi-grid" id="kpiGrid"></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h3>Processos recentes</h3></div>
+          <div class="card-body" style="padding-top:0;">
+            <table><thead><tr><th>Nº CNJ</th><th>Cliente</th><th>Fase</th><th>Próximo prazo</th><th>Status</th></tr></thead>
+            <tbody id="dashProcessTable"></tbody></table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Tarefas pendentes</h3></div>
+          <div class="card-body" id="dashTasks"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-processos">
+      <div class="page-head">
+        <div><h2>Processos</h2><p id="processosSub"></p></div>
+        <button class="btn-primary" id="btnNovoProcesso">+ Novo processo</button>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Nº CNJ</th><th>Cliente</th><th>Parte contrária</th><th>Área</th><th>Fase</th><th>Próximo prazo</th><th>Responsável</th><th>Status</th></tr></thead>
+        <tbody id="processosTable"></tbody></table>
+      </div>
+    </section>
+
+    <section class="view" id="view-agenda">
+      <div class="page-head"><div><h2>Agenda &amp; Tarefas</h2><p>Compromissos e pendências.</p></div>
+        <button class="btn-primary" id="btnNovaTarefa">+ Nova tarefa</button>
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h3>Compromissos</h3></div><div class="card-body" id="agendaList"></div></div>
+        <div class="card"><div class="card-head"><h3>Tarefas</h3></div><div class="card-body" id="tarefasList"></div></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-clientes">
+      <div class="page-head"><div><h2>Clientes</h2><p id="clientesSub"></p></div>
+        <button class="btn-primary" id="btnNovoCliente">+ Novo cliente</button>
+      </div>
+      <div class="card"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Cliente desde</th></tr></thead>
+      <tbody id="clientesTable"></tbody></table></div>
+    </section>
+
+    <section class="view" id="view-financeiro">
+      <div class="page-head"><div><h2>Financeiro</h2><p>Fluxo de caixa e faturamento.</p></div></div>
+      <div id="financeiroBody"></div>
+    </section>
+
+    <section class="view" id="view-timesheet">
+      <div class="page-head"><div><h2>Timesheet</h2><p>Registro de horas por processo.</p></div></div>
+      <div class="card">
+        <div class="card-head"><h3>Novo lançamento</h3></div>
+        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+          <input type="text" id="tsDesc" placeholder="Descrição da atividade" style="flex:2;min-width:200px;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;">
+          <input type="number" id="tsMinutes" placeholder="Minutos" style="width:110px;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;">
+          <button class="btn-primary" id="btnAddTimesheet">Lançar</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px;">
+        <table><thead><tr><th>Data</th><th>Responsável</th><th>Atividade</th><th>Duração</th></tr></thead>
+        <tbody id="timesheetTable"></tbody></table>
+      </div>
+    </section>
+
+    <section class="view" id="view-usuarios">
+      <div class="page-head">
+        <div><h2>Usuários</h2><p id="usuariosSub"></p></div>
+        <button class="btn-primary" id="btnNovoUsuario">+ Novo usuário</button>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th></th></tr></thead>
+        <tbody id="usuariosTable"></tbody></table>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<!-- Modal generico -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
