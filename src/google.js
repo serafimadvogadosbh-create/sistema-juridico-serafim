@@ -23,8 +23,11 @@ const ESCRITORIO = {
   nome: process.env.ESCRITORIO_NOME || 'Serafim Advogados',
   oabUf: process.env.ESCRITORIO_OAB_UF || 'MG',
   oabNumero: process.env.ESCRITORIO_OAB_NUMERO || '196.089',
-  endereco: process.env.ESCRITORIO_ENDERECO || '[endereço do escritório — preencher]',
+  endereco: process.env.ESCRITORIO_ENDERECO || 'Av. Francisco Sales, nº 329, Sala 1202, bairro Floresta, Belo Horizonte/MG – CEP 30.150-221',
   cidade: process.env.ESCRITORIO_CIDADE || 'Belo Horizonte/MG',
+  pixCnpj: process.env.ESCRITORIO_PIX_CNPJ || '60.186.215/0001-70',
+  pixBanco: process.env.ESCRITORIO_PIX_BANCO || 'BANCO INTER',
+  pixTitular: process.env.ESCRITORIO_PIX_TITULAR || 'DOUGLAS LÓZ SERAFIM',
 };
 
 function isConfigured() {
@@ -214,17 +217,60 @@ async function ensureFolder(accessToken, settingKey, folderName) {
   return folder.id;
 }
 
-async function createDocInFolder(accessToken, title, bodyText, folderId) {
+// Constroi o texto final e as requisicoes de formatacao (justificado + negrito
+// nos rotulos/clausulas) a partir de uma lista de paragrafos. Cada paragrafo e
+// { segments: [[texto, negrito], ...], align: 'JUSTIFIED'|'CENTER'|'START' }.
+function buildRichTextRequests(paragraphs) {
+  let text = '';
+  let index = 1; // corpo do Google Doc comeca no index 1
+  const boldRanges = [];
+  const paraRanges = [];
+  for (const para of paragraphs) {
+    const paraStart = index;
+    for (const [segText, bold] of para.segments) {
+      const segStart = index;
+      text += segText;
+      index += segText.length;
+      if (bold) boldRanges.push({ start: segStart, end: index });
+    }
+    text += '\n';
+    index += 1;
+    paraRanges.push({ start: paraStart, end: index, align: para.align || 'JUSTIFIED' });
+  }
+  const requests = [{ insertText: { location: { index: 1 }, text } }];
+  for (const pr of paraRanges) {
+    requests.push({
+      updateParagraphStyle: {
+        range: { startIndex: pr.start, endIndex: pr.end },
+        paragraphStyle: { alignment: pr.align },
+        fields: 'alignment',
+      },
+    });
+  }
+  for (const br of boldRanges) {
+    requests.push({
+      updateTextStyle: {
+        range: { startIndex: br.start, endIndex: br.end },
+        textStyle: { bold: true },
+        fields: 'bold',
+      },
+    });
+  }
+  return requests;
+}
+
+async function createDocInFolder(accessToken, title, paragraphs, folderId) {
   const doc = await fetch('https://docs.googleapis.com/v1/documents', {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
   }).then((r) => { if (!r.ok) throw new Error('docs_create_failed'); return r.json(); });
 
+  const requests = buildRichTextRequests(paragraphs);
   await fetch(`https://docs.googleapis.com/v1/documents/${doc.documentId}:batchUpdate`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: bodyText } }] }),
+    body: JSON.stringify({ requests }),
   }).then((r) => { if (!r.ok) throw new Error('docs_fill_failed'); });
 
   await driveRequest(accessToken, `https://www.googleapis.com/drive/v3/files/${doc.documentId}?addParents=${folderId}&fields=id,parents`, {
@@ -234,52 +280,125 @@ async function createDocInFolder(accessToken, title, bodyText, folderId) {
   return doc.documentId;
 }
 
-const TEMPLATE_PROCURACAO = `PROCURAÇÃO
+// Modelos de fallback (sem o papel timbrado com logotipo): usados apenas se
+// as configuracoes template_procuracao_id/template_contrato_id forem
+// removidas e precisarem ser recriadas do zero. Em producao, os modelos
+// "de verdade" sao os documentos com identidade visual do escritorio
+// (logotipo, faixas coloridas) enviados manualmente para a pasta "Modelos -
+// Sistema Jurídico" no Drive e referenciados via app_settings — este texto
+// replica a mesma estrutura/clausulas e a mesma formatacao (justificado +
+// negrito nos topicos), so que sem o papel timbrado.
+const TEMPLATE_PROCURACAO_PARAGRAPHS = [
+  { align: 'CENTER', segments: [['INSTRUMENTO PARTICULAR DE PROCURAÇÃO', true]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['OUTORGANTE: {{NOME_CLIENTE}}', true],
+    [', {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}}.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['OUTORGADO: {{NOME_ADVOGADO}}', true],
+    [', inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com escritório profissional situado à {{ESCRITORIO_ENDERECO}}.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['PODERES: ', true],
+    ['Pelo presente instrumento particular de procuração, o(a) OUTORGANTE nomeia e constitui seu bastante procurador(a) o(a) OUTORGADO(A), a quem confere amplos poderes para o foro em geral, com a cláusula "ad judicia et extra", em qualquer Juízo, Instância ou Tribunal, podendo propor contra quem de direito as ações competentes e defendê-lo(a) nas contrárias, seguindo umas e outras até final decisão, usando os recursos legais e acompanhando-os, conferindo-lhe, ainda, poderes especiais para confessar, desistir, transigir, firmar compromissos ou acordos, receber e dar quitação, agir em conjunto ou separadamente, substabelecer esta a outrem, com ou sem reserva de iguais poderes, dando tudo por bom, firme e valioso.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['Confere ainda, o(a) OUTORGANTE ao OUTORGADO(A) os poderes especiais para {{OBJETO_PROCURACAO}}.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['{{CIDADE}}, {{DATA_ATUAL}}.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['_______________________________________', false]] },
+  { align: 'START', segments: [['{{NOME_CLIENTE}}', true]] },
+  { align: 'START', segments: [['OUTORGANTE', false]] },
+];
 
-OUTORGANTE: {{NOME_CLIENTE}}, {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}}.
-
-OUTORGADO(A): {{NOME_ADVOGADO}}, inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com escritório profissional em {{ESCRITORIO_ENDERECO}}.
-
-PODERES: Pelo presente instrumento particular de procuração, o(a) OUTORGANTE nomeia e constitui seu bastante procurador(a) o(a) OUTORGADO(A), a quem confere amplos poderes para o foro em geral, com a cláusula "ad judicia et extra", em qualquer Juízo, Instância ou Tribunal, podendo propor contra quem de direito as ações competentes e defendê-lo(a) nas contrárias, seguindo umas e outras até final decisão, usando os recursos legais e acompanhando-os, conferindo-lhe, ainda, poderes especiais para confessar, desistir, transigir, firmar compromissos ou acordos, receber e dar quitação, agir em conjunto ou separadamente, substabelecer esta a outrem, com ou sem reserva de iguais poderes, dando tudo por bom, firme e valioso, especialmente para atuar em relação a: {{OBJETO_PROCURACAO}}.
-
-{{CIDADE}}, {{DATA_ATUAL}}.
-
-
-_______________________________________
-{{NOME_CLIENTE}}
-`;
-
-const TEMPLATE_CONTRATO = `CONTRATO DE PRESTAÇÃO DE SERVIÇOS ADVOCATÍCIOS
-
-CONTRATANTE: {{NOME_CLIENTE}}, {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}}.
-
-CONTRATADO(A): {{NOME_ESCRITORIO}}, inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com escritório profissional em {{ESCRITORIO_ENDERECO}}.
-
-As partes acima identificadas têm, entre si, justo e acertado o presente Contrato de Prestação de Serviços Advocatícios, que se regerá pelas cláusulas seguintes:
-
-CLÁUSULA 1ª — DO OBJETO
-O presente contrato tem como objeto a prestação de serviços advocatícios pelo(a) CONTRATADO(A) em favor do(a) CONTRATANTE, consistentes em: {{OBJETO_CONTRATO}}.
-
-CLÁUSULA 2ª — DOS HONORÁRIOS
-Pelos serviços ora contratados, o(a) CONTRATANTE pagará ao(à) CONTRATADO(A) o valor de {{VALOR_HONORARIOS}}, na seguinte forma: {{FORMA_PAGAMENTO}}.
-
-CLÁUSULA 3ª — DAS OBRIGAÇÕES
-O(A) CONTRATADO(A) obriga-se a empregar todos os esforços técnicos ao alcance da profissão em prol dos interesses do(a) CONTRATANTE, sem que isso represente garantia de resultado. O(A) CONTRATANTE obriga-se a fornecer, em tempo hábil, toda a documentação e informações necessárias à execução dos serviços.
-
-CLÁUSULA 4ª — DA VIGÊNCIA E RESCISÃO
-Este contrato vigorará a partir desta data até o cumprimento do objeto pactuado, podendo ser rescindido por qualquer das partes mediante notificação prévia, resguardado ao(à) CONTRATADO(A) o direito aos honorários proporcionais aos serviços já prestados até a rescisão.
-
-CLÁUSULA 5ª — DO FORO
-Fica eleito o foro da Comarca de {{CIDADE}} para dirimir quaisquer dúvidas oriundas do presente contrato.
-
-E por estarem assim justas e contratadas, as partes firmam o presente instrumento.
-
-{{CIDADE}}, {{DATA_ATUAL}}.
-
-
-_______________________________________                    _______________________________________
-{{NOME_CLIENTE}} (CONTRATANTE)                              {{NOME_ADVOGADO}} (CONTRATADO)
-`;
+const TEMPLATE_CONTRATO_PARAGRAPHS = [
+  { align: 'CENTER', segments: [['CONTRATO DE PRESTAÇÃO DE SERVIÇOS ADVOCATÍCIOS', true]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['Pelo presente instrumento particular, de um lado:', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['CONTRATANTE: {{NOME_CLIENTE}}', true],
+    [', {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}};', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['e, de outro lado:', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['CONTRATADO(A): {{NOME_ADVOGADO}}', true],
+    [', advogado(a), inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com endereço profissional situado à {{ESCRITORIO_ENDERECO}}.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['têm entre si justo e contratado o que segue:', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 1ª — DO OBJETO', true]] },
+  { align: 'JUSTIFIED', segments: [['O presente contrato tem por objeto a prestação de serviços advocatícios do(a) CONTRATADO(A) para o patrocínio de interesses do(a) CONTRATANTE em {{OBJETO_CONTRATO}}, bem como a prática de todos os atos processuais e extraprocessuais necessários à condução do feito até sua finalização.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 2ª — DA EXTENSÃO DOS SERVIÇOS', true]] },
+  { align: 'JUSTIFIED', segments: [['Os serviços compreendem, entre outros:', false]] },
+  { align: 'JUSTIFIED', segments: [['I. análise da documentação apresentada;', false]] },
+  { align: 'JUSTIFIED', segments: [['II. elaboração e protocolo da petição inicial ou manifestação cabível;', false]] },
+  { align: 'JUSTIFIED', segments: [['III. acompanhamento do processo até sentença, homologação de acordo ou encerramento da demanda;', false]] },
+  { align: 'JUSTIFIED', segments: [['IV. comparecimento a audiências e sessões de conciliação/mediação, quando designadas;', false]] },
+  { align: 'JUSTIFIED', segments: [['V. elaboração de petições incidentais necessárias ao regular andamento do feito;', false]] },
+  { align: 'JUSTIFIED', segments: [['VI. prática de atos perante cartórios, órgãos públicos e repartições correlatas, quando indispensável ao cumprimento do objeto contratado.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['Parágrafo único. ', true],
+    ['Eventuais serviços extraordinários, inclusive recursos, cumprimento de sentença, impugnações, incidentes complexos ou novas demandas não abrangidas neste contrato, somente serão exigíveis mediante ajuste adicional entre as partes.', false],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 3ª — DOS HONORÁRIOS CONTRATUAIS', true]] },
+  { align: 'JUSTIFIED', segments: [['Pelos serviços contratados, o(a) CONTRATANTE pagará ao(à) CONTRATADO(A) o valor de {{VALOR_HONORARIOS}}.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 4ª — DA FORMA DE PAGAMENTO', true]] },
+  { align: 'JUSTIFIED', segments: [['O pagamento será realizado da seguinte forma: {{FORMA_PAGAMENTO}}.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [
+    ['Parágrafo único. ', true],
+    ['O(A) CONTRATANTE deverá efetuar os pagamentos no prazo, na forma e nas condições estabelecidas no presente contrato através do ', false],
+    ['PIX/CNPJ nº {{PIX_CNPJ}}, {{PIX_BANCO}} – Titular: {{PIX_TITULAR}}.', true],
+  ] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 5ª — DAS DESPESAS E CUSTAS', true]] },
+  { align: 'JUSTIFIED', segments: [['As custas processuais, taxas, emolumentos, certidões, diligências, deslocamentos, autenticações, reconhecimentos de firma e demais despesas necessárias ao andamento da demanda não estão incluídas nos honorários contratados, incumbindo seu adiantamento e pagamento ao(à) CONTRATANTE, salvo ajuste expresso em sentido diverso.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 6ª — DOS HONORÁRIOS DE SUCUMBÊNCIA', true]] },
+  { align: 'JUSTIFIED', segments: [['Eventuais honorários de sucumbência fixados judicialmente pertencem exclusivamente ao(à) CONTRATADO(A), não se compensando nem se confundindo com os honorários contratuais ora pactuados.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 7ª — DAS OBRIGAÇÕES DO(A) CONTRATANTE', true]] },
+  { align: 'JUSTIFIED', segments: [['O(A) CONTRATANTE compromete-se a:', false]] },
+  { align: 'JUSTIFIED', segments: [['I. fornecer documentos, informações e esclarecimentos verdadeiros e completos;', false]] },
+  { align: 'JUSTIFIED', segments: [['II. comparecer aos atos para os quais for intimado(a) ou convocado(a);', false]] },
+  { align: 'JUSTIFIED', segments: [['III. comunicar imediatamente qualquer alteração de endereço, telefone ou e-mail;', false]] },
+  { align: 'JUSTIFIED', segments: [['IV. efetuar pontualmente os pagamentos ajustados neste instrumento.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 8ª — DA RESCISÃO', true]] },
+  { align: 'JUSTIFIED', segments: [['O presente contrato poderá ser rescindido por qualquer das partes, mediante comunicação escrita. Em caso de revogação imotivada ou desistência por parte do(a) CONTRATANTE após o início dos serviços, permanecerão devidos os honorários proporcionais ao trabalho já realizado, sem prejuízo das despesas assumidas.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['CLÁUSULA 9ª — DO FORO', true]] },
+  { align: 'JUSTIFIED', segments: [['Para dirimir quaisquer controvérsias oriundas deste contrato, as partes elegem o foro da Comarca de {{CIDADE}}, com renúncia de qualquer outro, por mais privilegiado que seja.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['E, por estarem justas e contratadas, firmam o presente instrumento em duas vias de igual teor e forma, juntamente com duas testemunhas.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'JUSTIFIED', segments: [['{{CIDADE}}, {{DATA_ATUAL}}.', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['_______________________________________', false]] },
+  { align: 'START', segments: [['{{NOME_CLIENTE}}', true]] },
+  { align: 'START', segments: [['CONTRATANTE', false]] },
+  { align: 'START', segments: [['', false]] },
+  { align: 'START', segments: [['_______________________________________', false]] },
+  { align: 'START', segments: [['{{NOME_ADVOGADO}}', true]] },
+  { align: 'START', segments: [['CONTRATADO(A) — OAB/{{OAB_UF}} {{OAB_NUMERO}}', false]] },
+];
 
 async function ensureTemplates(userId) {
   const accessToken = await getValidAccessToken(userId);
@@ -288,12 +407,12 @@ async function ensureTemplates(userId) {
 
   let procuracaoId = getSetting('template_procuracao_id');
   if (!procuracaoId) {
-    procuracaoId = await createDocInFolder(accessToken, 'Modelo - Procuração', TEMPLATE_PROCURACAO, modelosFolderId);
+    procuracaoId = await createDocInFolder(accessToken, 'Modelo - Procuração', TEMPLATE_PROCURACAO_PARAGRAPHS, modelosFolderId);
     setSetting('template_procuracao_id', procuracaoId);
   }
   let contratoId = getSetting('template_contrato_id');
   if (!contratoId) {
-    contratoId = await createDocInFolder(accessToken, 'Modelo - Contrato de Prestação de Serviços', TEMPLATE_CONTRATO, modelosFolderId);
+    contratoId = await createDocInFolder(accessToken, 'Modelo - Contrato de Prestação de Serviços', TEMPLATE_CONTRATO_PARAGRAPHS, modelosFolderId);
     setSetting('template_contrato_id', contratoId);
   }
   return { procuracaoId, contratoId, modelosFolderId };
@@ -345,6 +464,9 @@ async function generateDocument(userId, { tipo, cliente, advogadoNome, extra = {
     OBJETO_CONTRATO: extra.objeto || '[objeto do contrato — preencher]',
     VALOR_HONORARIOS: extra.valor_honorarios || '[valor — a combinar]',
     FORMA_PAGAMENTO: extra.forma_pagamento || '[forma de pagamento — a combinar]',
+    PIX_CNPJ: ESCRITORIO.pixCnpj,
+    PIX_BANCO: ESCRITORIO.pixBanco,
+    PIX_TITULAR: ESCRITORIO.pixTitular,
   };
 
   const requests = Object.entries(replacements).map(([key, value]) => ({
