@@ -87,10 +87,59 @@ function init() {
       minutes INTEGER NOT NULL,
       entry_date TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL DEFAULT 'google',
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      expires_at INTEGER NOT NULL,
+      scope TEXT,
+      google_email TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id, provider)
+    );
+
+    CREATE TABLE IF NOT EXISTS email_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      gmail_message_id TEXT,
+      subject TEXT,
+      snippet TEXT,
+      from_addr TEXT,
+      to_addr TEXT,
+      email_date TEXT,
+      direction TEXT,
+      synced_by INTEGER REFERENCES users(id),
+      UNIQUE(client_id, gmail_message_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS drive_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      process_id INTEGER REFERENCES processes(id) ON DELETE CASCADE,
+      client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+      google_file_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mime_type TEXT,
+      link TEXT,
+      added_by INTEGER REFERENCES users(id),
+      added_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
+
+  migrate();
 
   const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
   if (userCount === 0) seed();
+}
+
+// Adiciona colunas novas a bancos ja existentes (SQLite nao suporta
+// "ADD COLUMN IF NOT EXISTS", entao checamos o schema antes).
+function migrate() {
+  const cols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name);
+  if (!cols.includes('email')) db.exec('ALTER TABLE clients ADD COLUMN email TEXT');
+  if (!cols.includes('phone')) db.exec('ALTER TABLE clients ADD COLUMN phone TEXT');
 }
 
 function seed() {

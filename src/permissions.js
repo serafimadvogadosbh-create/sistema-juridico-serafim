@@ -3,9 +3,9 @@
 
 // Modulos visiveis na sidebar por papel
 const MODULES_BY_ROLE = {
-  socio: ['dashboard', 'processos', 'agenda', 'clientes', 'financeiro', 'timesheet', 'usuarios'],
-  advogado: ['dashboard', 'processos', 'agenda', 'clientes', 'timesheet'],
-  estagiario: ['dashboard', 'processos', 'agenda', 'timesheet'],
+  socio: ['dashboard', 'processos', 'agenda', 'clientes', 'financeiro', 'timesheet', 'usuarios', 'integracoes'],
+  advogado: ['dashboard', 'processos', 'agenda', 'clientes', 'timesheet', 'integracoes'],
+  estagiario: ['dashboard', 'processos', 'agenda', 'timesheet', 'integracoes'],
 };
 
 // Processos: socio ve todos; advogado e estagiario veem so os que sao responsaveis
