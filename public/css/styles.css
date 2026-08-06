@@ -116,4 +116,31 @@ tbody tr:hover{background:var(--gray-50);}
 .modal .field{margin-bottom:12px;}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;}
 
-@media(max-width:1080px){.kpi-grid{grid-template-columns:repeat(2,1fr);} .grid-2{grid-template-columns:1fr;}}
+/* ---------- KANBAN (Agenda & Tarefas) ---------- */
+.kanban-board{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;align-items:start;}
+.kanban-col{background:var(--gray-100);border-radius:var(--radius);display:flex;flex-direction:column;min-height:240px;}
+.kanban-col-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;font-size:13px;font-weight:700;color:var(--navy-900);border-bottom:1px solid var(--gray-200);}
+.kanban-count{background:var(--gray-200);color:var(--gray-600);border-radius:20px;padding:1px 8px;font-size:11.5px;font-weight:700;}
+.kanban-col-body{padding:10px;flex:1;display:flex;flex-direction:column;gap:8px;min-height:100px;transition:background .12s;border-radius:0 0 var(--radius) var(--radius);}
+.kanban-col-body.drag-over{background:var(--blue-100);}
+.kcard{background:#fff;border-radius:8px;border:1px solid var(--gray-200);box-shadow:var(--shadow);padding:10px 12px;cursor:grab;}
+.kcard:active{cursor:grabbing;}
+.kcard.dragging{opacity:.4;}
+.kcard-top{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px;}
+.kcard-type{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:5px;}
+.kcard-type.prazo{background:#fdf2df;color:#a5730f;}
+.kcard-type.audiencia{background:#fdeaea;color:var(--red);}
+.kcard-type.tarefa{background:var(--blue-100);color:var(--blue-600);}
+.kcard-type.reuniao{background:#e5f7ef;color:var(--green);}
+.kcard-type.outro{background:var(--gray-200);color:var(--gray-600);}
+.kcard-prio{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.kcard-prio.baixa{background:var(--gray-400);}
+.kcard-prio.media{background:var(--blue-500);}
+.kcard-prio.alta{background:var(--amber);}
+.kcard-prio.urgente{background:var(--red);}
+.kcard-title{font-size:13px;font-weight:600;color:var(--gray-800);margin-bottom:5px;line-height:1.35;}
+.kcard-meta{font-size:11.5px;color:var(--gray-600);display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.kcard-gcal{color:var(--blue-600);}
+.kanban-empty{color:var(--gray-600);font-size:12px;padding:6px 2px;}
+
+@media(max-width:1080px){.kpi-grid{grid-template-columns:repeat(2,1fr);} .grid-2{grid-template-columns:1fr;} .kanban-board{grid-template-columns:1fr;}}
