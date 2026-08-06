@@ -31,6 +31,15 @@
   function initials(name) {
     return name.split(' ').filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
   }
+  function escapeAttr(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+  function escapeHtml(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  const AGENDA_TYPE_LABEL = { prazo: 'Prazo', audiencia: 'Audiência', tarefa: 'Tarefa', reuniao: 'Reunião', outro: 'Outro' };
+  const AGENDA_PRIORITY_LABEL = { baixa: 'Baixa', media: 'Média', alta: 'Alta', urgente: 'Urgente' };
 
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
@@ -101,10 +110,10 @@
       <tr><td class="mono">${p.cnj_number}</td><td>${p.client_name}</td><td>${p.phase || '—'}</td><td>${fmtDate(p.next_deadline)}</td><td>${tag(p.status)}</td></tr>
     `).join('') || '<tr><td colspan="5">Nenhum processo.</td></tr>';
 
-    const t = await api('/api/tarefas');
-    const pending = t.tarefas.filter(x => !x.done).slice(0, 6);
+    const ag = await api('/api/agenda');
+    const pending = ag.agenda.filter(x => x.type === 'tarefa' && x.status !== 'concluido').slice(0, 6);
     document.getElementById('dashTasks').innerHTML = pending.map(x => `
-      <div class="checklist-item"><input type="checkbox" data-id="${x.id}" class="taskToggle"><label>${x.title}</label><span class="prazo">${fmtDate(x.due_date)}</span></div>
+      <div class="checklist-item"><input type="checkbox" data-id="${x.id}" class="taskToggle"><label>${escapeHtml(x.title)}</label><span class="prazo">${fmtDate(x.event_date)}</span></div>
     `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhuma tarefa pendente.</p>';
     bindTaskToggles();
   }
@@ -124,18 +133,145 @@
     });
   }
 
-  async function loadAgenda() {
-    const [ag, ts] = await Promise.all([api('/api/agenda'), api('/api/tarefas')]);
-    document.getElementById('agendaList').innerHTML = ag.agenda.map(e => `
-      <div class="agenda-item"><div class="agenda-time">${e.event_time}</div>
-        <div class="agenda-text"><b>${e.title}</b><span>${e.detail || ''}</span></div></div>
-    `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhum compromisso.</p>';
+  // ---------- Agenda & Tarefas: quadro Kanban ----------
+  let AGENDA_CARDS = [];
+  let draggedCardId = null;
+  let justDraggedCard = false;
 
-    document.getElementById('tarefasList').innerHTML = ts.tarefas.map(x => `
-      <div class="checklist-item ${x.done ? 'checked' : ''}"><input type="checkbox" data-id="${x.id}" class="taskToggle" ${x.done ? 'checked' : ''}>
-        <label>${x.title}</label><span class="prazo">${fmtDate(x.due_date)}</span></div>
-    `).join('') || '<p style="color:var(--gray-600);font-size:13px;">Nenhuma tarefa.</p>';
-    bindTaskToggles();
+  async function loadAgenda() {
+    const d = await api('/api/agenda');
+    AGENDA_CARDS = d.agenda;
+    const cols = { a_fazer: [], em_andamento: [], concluido: [] };
+    AGENDA_CARDS.forEach(c => { (cols[c.status] || cols.a_fazer).push(c); });
+    renderKanbanColumn('colAFazer', 'countAFazer', cols.a_fazer);
+    renderKanbanColumn('colEmAndamento', 'countEmAndamento', cols.em_andamento);
+    renderKanbanColumn('colConcluido', 'countConcluido', cols.concluido);
+    bindKanbanDnD();
+  }
+
+  function renderKanbanColumn(elId, countId, cards) {
+    document.getElementById(countId).textContent = cards.length;
+    document.getElementById(elId).innerHTML = cards.map(c => `
+      <div class="kcard" draggable="true" data-id="${c.id}">
+        <div class="kcard-top">
+          <span class="kcard-type ${c.type}">${AGENDA_TYPE_LABEL[c.type] || c.type}</span>
+          <span class="kcard-prio ${c.priority}" title="Prioridade: ${AGENDA_PRIORITY_LABEL[c.priority] || c.priority}"></span>
+        </div>
+        <div class="kcard-title">${escapeHtml(c.title)}</div>
+        <div class="kcard-meta">
+          <span>${fmtDate(c.event_date)}${c.event_time ? ' · ' + c.event_time : ''}</span>
+          ${c.client_name ? `<span>· ${escapeHtml(c.client_name)}</span>` : ''}
+          ${c.google_event_id ? '<span class="kcard-gcal" title="Sincronizado com o Google Agenda">📅</span>' : ''}
+        </div>
+      </div>
+    `).join('') || '<p class="kanban-empty">Nenhum card.</p>';
+  }
+
+  function bindKanbanDnD() {
+    document.querySelectorAll('.kcard').forEach(card => {
+      card.addEventListener('dragstart', () => { draggedCardId = card.dataset.id; card.classList.add('dragging'); });
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        justDraggedCard = true;
+        setTimeout(() => { justDraggedCard = false; }, 50);
+      });
+      card.addEventListener('click', () => {
+        if (justDraggedCard) return;
+        const found = AGENDA_CARDS.find(c => c.id === Number(card.dataset.id));
+        if (found) openCardModal(found);
+      });
+    });
+    document.querySelectorAll('.kanban-col-body').forEach(col => {
+      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag-over'); });
+      col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        col.classList.remove('drag-over');
+        if (!draggedCardId) return;
+        const newStatus = col.closest('.kanban-col').dataset.status;
+        const id = draggedCardId;
+        draggedCardId = null;
+        await api(`/api/agenda/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
+        loadAgenda();
+      });
+    });
+  }
+
+  async function openCardModal(card) {
+    const isEdit = Boolean(card);
+    const [clientes, processos] = await Promise.all([
+      api('/api/clientes').then(d => d.clientes).catch(() => []),
+      api('/api/processos').then(d => d.processos).catch(() => []),
+    ]);
+    modalBox.innerHTML = `
+      <h3>${isEdit ? 'Editar card' : 'Novo card'}</h3>
+      <div class="field"><label>Título</label><input id="mTitle" type="text" value="${isEdit ? escapeAttr(card.title) : ''}"></div>
+      <div class="field"><label>Tipo</label><select id="mType">
+        ${Object.entries(AGENDA_TYPE_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Prioridade</label><select id="mPriority">
+        ${Object.entries(AGENDA_PRIORITY_LABEL).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Data</label><input id="mDate" type="date" value="${isEdit ? card.event_date : ''}"></div>
+      <div class="field"><label>Hora (deixe em branco para card de dia inteiro)</label><input id="mTime" type="time" value="${isEdit ? (card.event_time || '') : ''}"></div>
+      <div class="field"><label>Local (audiências/reuniões)</label><input id="mLocation" type="text" value="${isEdit ? escapeAttr(card.location || '') : ''}" placeholder="Fórum X, sala Y / link da videochamada"></div>
+      <div class="field"><label>Cliente (opcional)</label><select id="mClient"><option value="">—</option>${clientes.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Processo (opcional)</label><select id="mProcess"><option value="">—</option>${processos.map(p => `<option value="${p.id}">${escapeHtml(p.cnj_number)} — ${escapeHtml(p.client_name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Descrição</label><textarea id="mDetail" rows="3" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;">${isEdit ? escapeHtml(card.detail || '') : ''}</textarea></div>
+      <p style="font-size:11.5px;color:var(--gray-600);margin-bottom:6px;">Se a conta Google do escritório estiver conectada, este card também é criado/atualizado no Google Agenda, com lembrete por e-mail 1 dia antes.</p>
+      <div class="modal-actions">
+        ${isEdit ? '<button class="btn-ghost" id="mDelete" style="color:#c0392b;border-color:#c0392b;margin-right:auto;">Excluir</button>' : ''}
+        <button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button>
+      </div>
+      <div id="mErr" style="color:var(--red);font-size:12.5px;margin-top:8px;"></div>
+    `;
+    backdrop.classList.add('active');
+    if (isEdit) {
+      document.getElementById('mType').value = card.type;
+      document.getElementById('mPriority').value = card.priority;
+      if (card.client_id) document.getElementById('mClient').value = String(card.client_id);
+      if (card.process_id) document.getElementById('mProcess').value = String(card.process_id);
+      document.getElementById('mDelete').onclick = async () => {
+        if (!confirm('Excluir este card? Se estiver sincronizado, o evento também será removido do Google Agenda.')) return;
+        await api('/api/agenda/' + card.id, { method: 'DELETE' });
+        closeModal();
+        loadAgenda();
+      };
+    } else {
+      document.getElementById('mType').value = 'tarefa';
+      document.getElementById('mPriority').value = 'media';
+    }
+    document.getElementById('mCancel').onclick = closeModal;
+    document.getElementById('mSave').onclick = async () => {
+      const title = document.getElementById('mTitle').value.trim();
+      const event_date = document.getElementById('mDate').value;
+      if (!title || !event_date) {
+        document.getElementById('mErr').textContent = 'Preencha ao menos o título e a data.';
+        return;
+      }
+      const payload = {
+        title,
+        detail: document.getElementById('mDetail').value.trim(),
+        type: document.getElementById('mType').value,
+        priority: document.getElementById('mPriority').value,
+        event_date,
+        event_time: document.getElementById('mTime').value,
+        location: document.getElementById('mLocation').value.trim(),
+        client_id: document.getElementById('mClient').value || null,
+        process_id: document.getElementById('mProcess').value || null,
+      };
+      const btn = document.getElementById('mSave');
+      btn.disabled = true;
+      try {
+        if (isEdit) await api('/api/agenda/' + card.id, { method: 'PATCH', body: JSON.stringify(payload) });
+        else await api('/api/agenda', { method: 'POST', body: JSON.stringify(payload) });
+        closeModal();
+        loadAgenda();
+      } catch (e) {
+        document.getElementById('mErr').textContent = 'Não foi possível salvar o card.';
+        btn.disabled = false;
+      }
+    };
   }
 
   let showingArquivados = false;
@@ -181,7 +317,10 @@
   function bindTaskToggles() {
     document.querySelectorAll('.taskToggle').forEach(cb => {
       cb.addEventListener('change', async () => {
-        await api(`/api/tarefas/${cb.dataset.id}/toggle`, { method: 'PATCH' });
+        await api(`/api/agenda/${cb.dataset.id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: cb.checked ? 'concluido' : 'a_fazer' }),
+        });
         loadView(document.querySelector('.nav-item.active')?.dataset.view || 'dashboard');
       });
     });
@@ -192,24 +331,6 @@
   const modalBox = document.getElementById('modalBox');
   function closeModal() { backdrop.classList.remove('active'); modalBox.innerHTML = ''; }
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
-
-  function openTaskModal() {
-    modalBox.innerHTML = `
-      <h3>Nova tarefa</h3>
-      <div class="field"><label>Título</label><input id="mTitle" type="text"></div>
-      <div class="field"><label>Prazo</label><input id="mDate" type="date"></div>
-      <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button></div>
-    `;
-    backdrop.classList.add('active');
-    document.getElementById('mCancel').onclick = closeModal;
-    document.getElementById('mSave').onclick = async () => {
-      const title = document.getElementById('mTitle').value.trim();
-      if (!title) return;
-      await api('/api/tarefas', { method: 'POST', body: JSON.stringify({ title, due_date: document.getElementById('mDate').value || null }) });
-      closeModal();
-      loadView(document.querySelector('.nav-item.active')?.dataset.view || 'agenda');
-    };
-  }
 
   async function openProcessModal() {
     const clientes = (await api('/api/clientes')).clientes;
@@ -654,7 +775,7 @@
         window.location.href = '/';
       });
 
-      document.getElementById('btnNovaTarefa').addEventListener('click', openTaskModal);
+      document.getElementById('btnNovoCard').addEventListener('click', () => openCardModal(null));
       document.getElementById('btnNovoProcesso').addEventListener('click', openProcessModal);
       document.getElementById('btnNovoCliente').addEventListener('click', openClientModal);
       document.getElementById('btnChangePassword').addEventListener('click', openChangePasswordModal);
