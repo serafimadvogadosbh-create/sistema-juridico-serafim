@@ -126,6 +126,11 @@ function init() {
       added_by INTEGER REFERENCES users(id),
       added_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 
   migrate();
@@ -140,6 +145,11 @@ function migrate() {
   const cols = db.prepare(`PRAGMA table_info(clients)`).all().map((c) => c.name);
   if (!cols.includes('email')) db.exec('ALTER TABLE clients ADD COLUMN email TEXT');
   if (!cols.includes('phone')) db.exec('ALTER TABLE clients ADD COLUMN phone TEXT');
+  if (!cols.includes('cpf_cnpj')) db.exec('ALTER TABLE clients ADD COLUMN cpf_cnpj TEXT');
+  if (!cols.includes('rg')) db.exec('ALTER TABLE clients ADD COLUMN rg TEXT');
+  if (!cols.includes('endereco')) db.exec('ALTER TABLE clients ADD COLUMN endereco TEXT');
+  if (!cols.includes('estado_civil')) db.exec('ALTER TABLE clients ADD COLUMN estado_civil TEXT');
+  if (!cols.includes('profissao')) db.exec('ALTER TABLE clients ADD COLUMN profissao TEXT');
 }
 
 function seed() {

@@ -12,8 +12,20 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
+
+// Dados do escritorio usados para preencher procuracao/contrato.
+// Podem ser sobrescritos via variaveis de ambiente no Render.
+const ESCRITORIO = {
+  nome: process.env.ESCRITORIO_NOME || 'Serafim Advogados',
+  oabUf: process.env.ESCRITORIO_OAB_UF || 'MG',
+  oabNumero: process.env.ESCRITORIO_OAB_NUMERO || '[OAB — preencher]',
+  endereco: process.env.ESCRITORIO_ENDERECO || '[endereço do escritório — preencher]',
+  cidade: process.env.ESCRITORIO_CIDADE || 'Belo Horizonte/MG',
+};
 
 function isConfigured() {
   return Boolean(CLIENT_ID && CLIENT_SECRET && REDIRECT_URI);
@@ -158,6 +170,195 @@ async function searchEmails(userId, clientEmail) {
   return details;
 }
 
+// ---------- Configuracoes persistidas (ids de pasta/modelos) ----------
+function getSetting(key) {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+function setSetting(key, value) {
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value);
+}
+
+// ---------- Geracao de documentos (Procuracao / Contrato) ----------
+async function driveRequest(accessToken, url, opts = {}) {
+  const res = await fetch(url, {
+    ...opts,
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  if (!res.ok) throw new Error('drive_api_failed: ' + (await res.text()));
+  return res.json();
+}
+
+async function findFolderByName(accessToken, name) {
+  const q = encodeURIComponent(`name = '${name.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`);
+  const data = await driveRequest(accessToken, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
+  return (data.files && data.files[0]) || null;
+}
+
+async function createFolder(accessToken, name) {
+  return driveRequest(accessToken, 'https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink', {
+    method: 'POST',
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+}
+
+async function ensureFolder(accessToken, settingKey, folderName) {
+  const cached = getSetting(settingKey);
+  if (cached) return cached;
+  const existing = await findFolderByName(accessToken, folderName);
+  const folder = existing || (await createFolder(accessToken, folderName));
+  setSetting(settingKey, folder.id);
+  return folder.id;
+}
+
+async function createDocInFolder(accessToken, title, bodyText, folderId) {
+  const doc = await fetch('https://docs.googleapis.com/v1/documents', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  }).then((r) => { if (!r.ok) throw new Error('docs_create_failed'); return r.json(); });
+
+  await fetch(`https://docs.googleapis.com/v1/documents/${doc.documentId}:batchUpdate`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: bodyText } }] }),
+  }).then((r) => { if (!r.ok) throw new Error('docs_fill_failed'); });
+
+  await driveRequest(accessToken, `https://www.googleapis.com/drive/v3/files/${doc.documentId}?addParents=${folderId}&fields=id,parents`, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  });
+  return doc.documentId;
+}
+
+const TEMPLATE_PROCURACAO = `PROCURAÇÃO
+
+OUTORGANTE: {{NOME_CLIENTE}}, {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}}.
+
+OUTORGADO(A): {{NOME_ADVOGADO}}, inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com escritório profissional em {{ESCRITORIO_ENDERECO}}.
+
+PODERES: Pelo presente instrumento particular de procuração, o(a) OUTORGANTE nomeia e constitui seu bastante procurador(a) o(a) OUTORGADO(A), a quem confere amplos poderes para o foro em geral, com a cláusula "ad judicia et extra", em qualquer Juízo, Instância ou Tribunal, podendo propor contra quem de direito as ações competentes e defendê-lo(a) nas contrárias, seguindo umas e outras até final decisão, usando os recursos legais e acompanhando-os, conferindo-lhe, ainda, poderes especiais para confessar, desistir, transigir, firmar compromissos ou acordos, receber e dar quitação, agir em conjunto ou separadamente, substabelecer esta a outrem, com ou sem reserva de iguais poderes, dando tudo por bom, firme e valioso, especialmente para atuar em relação a: {{OBJETO_PROCURACAO}}.
+
+{{CIDADE}}, {{DATA_ATUAL}}.
+
+
+_______________________________________
+{{NOME_CLIENTE}}
+`;
+
+const TEMPLATE_CONTRATO = `CONTRATO DE PRESTAÇÃO DE SERVIÇOS ADVOCATÍCIOS
+
+CONTRATANTE: {{NOME_CLIENTE}}, {{QUALIFICACAO_CLIENTE}}, portador(a) do CPF/CNPJ nº {{CPF_CNPJ}}, RG nº {{RG}}, residente e domiciliado(a) em {{ENDERECO}}.
+
+CONTRATADO(A): {{NOME_ESCRITORIO}}, inscrito(a) na OAB/{{OAB_UF}} sob o nº {{OAB_NUMERO}}, com escritório profissional em {{ESCRITORIO_ENDERECO}}.
+
+As partes acima identificadas têm, entre si, justo e acertado o presente Contrato de Prestação de Serviços Advocatícios, que se regerá pelas cláusulas seguintes:
+
+CLÁUSULA 1ª — DO OBJETO
+O presente contrato tem como objeto a prestação de serviços advocatícios pelo(a) CONTRATADO(A) em favor do(a) CONTRATANTE, consistentes em: {{OBJETO_CONTRATO}}.
+
+CLÁUSULA 2ª — DOS HONORÁRIOS
+Pelos serviços ora contratados, o(a) CONTRATANTE pagará ao(à) CONTRATADO(A) o valor de {{VALOR_HONORARIOS}}, na seguinte forma: {{FORMA_PAGAMENTO}}.
+
+CLÁUSULA 3ª — DAS OBRIGAÇÕES
+O(A) CONTRATADO(A) obriga-se a empregar todos os esforços técnicos ao alcance da profissão em prol dos interesses do(a) CONTRATANTE, sem que isso represente garantia de resultado. O(A) CONTRATANTE obriga-se a fornecer, em tempo hábil, toda a documentação e informações necessárias à execução dos serviços.
+
+CLÁUSULA 4ª — DA VIGÊNCIA E RESCISÃO
+Este contrato vigorará a partir desta data até o cumprimento do objeto pactuado, podendo ser rescindido por qualquer das partes mediante notificação prévia, resguardado ao(à) CONTRATADO(A) o direito aos honorários proporcionais aos serviços já prestados até a rescisão.
+
+CLÁUSULA 5ª — DO FORO
+Fica eleito o foro da Comarca de {{CIDADE}} para dirimir quaisquer dúvidas oriundas do presente contrato.
+
+E por estarem assim justas e contratadas, as partes firmam o presente instrumento.
+
+{{CIDADE}}, {{DATA_ATUAL}}.
+
+
+_______________________________________                    _______________________________________
+{{NOME_CLIENTE}} (CONTRATANTE)                              {{NOME_ADVOGADO}} (CONTRATADO)
+`;
+
+async function ensureTemplates(userId) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const modelosFolderId = await ensureFolder(accessToken, 'modelos_folder_id', 'Modelos - Sistema Jurídico');
+
+  let procuracaoId = getSetting('template_procuracao_id');
+  if (!procuracaoId) {
+    procuracaoId = await createDocInFolder(accessToken, 'Modelo - Procuração', TEMPLATE_PROCURACAO, modelosFolderId);
+    setSetting('template_procuracao_id', procuracaoId);
+  }
+  let contratoId = getSetting('template_contrato_id');
+  if (!contratoId) {
+    contratoId = await createDocInFolder(accessToken, 'Modelo - Contrato de Prestação de Serviços', TEMPLATE_CONTRATO, modelosFolderId);
+    setSetting('template_contrato_id', contratoId);
+  }
+  return { procuracaoId, contratoId, modelosFolderId };
+}
+
+function qualificacaoCliente(cliente) {
+  if (cliente.type === 'PJ') return 'pessoa jurídica de direito privado';
+  const estadoCivil = cliente.estado_civil || '[estado civil]';
+  const profissao = cliente.profissao || '[profissão]';
+  return `brasileiro(a), ${estadoCivil}, ${profissao}`;
+}
+
+function fmtDataExtenso() {
+  return new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+// Gera Procuracao ou Contrato de Prestacao de Servicos para um cliente,
+// preenchendo um modelo do Google Docs com os dados do cliente/escritorio.
+async function generateDocument(userId, { tipo, cliente, advogadoNome, extra = {} }) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const { procuracaoId, contratoId, modelosFolderId } = await ensureTemplates(userId);
+  const destFolderId = await ensureFolder(accessToken, 'documentos_gerados_folder_id', 'Documentos Gerados - Sistema Jurídico');
+
+  const isContrato = tipo === 'contrato';
+  const templateId = isContrato ? contratoId : procuracaoId;
+  const docName = `${isContrato ? 'Contrato de Prestação de Serviços' : 'Procuração'} - ${cliente.name}`;
+
+  const copyRes = await driveRequest(
+    accessToken,
+    `https://www.googleapis.com/drive/v3/files/${templateId}/copy?fields=id,name,webViewLink`,
+    { method: 'POST', body: JSON.stringify({ name: docName, parents: [destFolderId] }) }
+  );
+
+  const replacements = {
+    NOME_CLIENTE: cliente.name || '',
+    QUALIFICACAO_CLIENTE: qualificacaoCliente(cliente),
+    CPF_CNPJ: cliente.cpf_cnpj || '[CPF/CNPJ — preencher]',
+    RG: cliente.rg || (cliente.type === 'PJ' ? 'não se aplica' : '[RG — preencher]'),
+    ENDERECO: cliente.endereco || '[endereço — preencher]',
+    NOME_ADVOGADO: advogadoNome || ESCRITORIO.nome,
+    NOME_ESCRITORIO: ESCRITORIO.nome,
+    OAB_UF: ESCRITORIO.oabUf,
+    OAB_NUMERO: ESCRITORIO.oabNumero,
+    ESCRITORIO_ENDERECO: ESCRITORIO.endereco,
+    CIDADE: ESCRITORIO.cidade,
+    DATA_ATUAL: fmtDataExtenso(),
+    OBJETO_PROCURACAO: extra.objeto || 'representação judicial e extrajudicial em geral',
+    OBJETO_CONTRATO: extra.objeto || '[objeto do contrato — preencher]',
+    VALOR_HONORARIOS: extra.valor_honorarios || '[valor — a combinar]',
+    FORMA_PAGAMENTO: extra.forma_pagamento || '[forma de pagamento — a combinar]',
+  };
+
+  const requests = Object.entries(replacements).map(([key, value]) => ({
+    replaceAllText: { containsText: { text: `{{${key}}}`, matchCase: true }, replaceText: String(value) },
+  }));
+  await fetch(`https://docs.googleapis.com/v1/documents/${copyRes.id}:batchUpdate`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requests }),
+  }).then((r) => { if (!r.ok) throw new Error('docs_replace_failed: ' + r.status); });
+
+  return { id: copyRes.id, name: copyRes.name, webViewLink: copyRes.webViewLink };
+}
+
 module.exports = {
   isConfigured,
   buildAuthUrl,
@@ -169,4 +370,5 @@ module.exports = {
   fetchUserInfo,
   sendEmail,
   searchEmails,
+  generateDocument,
 };
