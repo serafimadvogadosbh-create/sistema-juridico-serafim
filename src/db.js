@@ -151,6 +151,33 @@ function migrate() {
   if (!cols.includes('estado_civil')) db.exec('ALTER TABLE clients ADD COLUMN estado_civil TEXT');
   if (!cols.includes('profissao')) db.exec('ALTER TABLE clients ADD COLUMN profissao TEXT');
   if (!cols.includes('archived_at')) db.exec('ALTER TABLE clients ADD COLUMN archived_at TEXT');
+
+  // Quadro Kanban de Agenda & Tarefas: tipo (prazo/audiencia/tarefa/reuniao/outro),
+  // prioridade, status da coluna, cliente vinculado, local e id do evento espelhado
+  // no Google Agenda. Roda uma unica vez (checagem da coluna 'type').
+  const agendaCols = db.prepare(`PRAGMA table_info(agenda_events)`).all().map((c) => c.name);
+  if (!agendaCols.includes('type')) {
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN type TEXT NOT NULL DEFAULT 'tarefa'`);
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN priority TEXT NOT NULL DEFAULT 'media'`);
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN status TEXT NOT NULL DEFAULT 'a_fazer'`);
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN client_id INTEGER REFERENCES clients(id)`);
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN location TEXT`);
+    db.exec(`ALTER TABLE agenda_events ADD COLUMN google_event_id TEXT`);
+    // Compromissos ja existentes tinham data+hora fixas: tratamos como "audiencia" por padrao.
+    db.exec(`UPDATE agenda_events SET type = 'audiencia'`);
+
+    // Migra as tarefas simples (tabela legada "tasks") para o quadro unificado,
+    // preservando o titulo, prazo e status de conclusao.
+    const oldTasks = db.prepare('SELECT * FROM tasks').all();
+    const insertMigrated = db.prepare(`
+      INSERT INTO agenda_events (title, detail, event_date, event_time, user_id, process_id, type, priority, status)
+      VALUES (?, '', ?, '', ?, ?, 'tarefa', 'media', ?)
+    `);
+    const today = new Date().toISOString().slice(0, 10);
+    for (const t of oldTasks) {
+      insertMigrated.run(t.title, t.due_date || today, t.user_id, t.process_id, t.done ? 'concluido' : 'a_fazer');
+    }
+  }
 }
 
 function seed() {
@@ -187,21 +214,20 @@ function seed() {
   insertProcess.run('5009981-40.2025.8.13.0024', c3, 'Construtora Aliança', 'Cível', 'Execução', '2026-08-09', 'urgente', socioId);
   insertProcess.run('5002210-05.2026.8.13.0024', c4, 'Seguradora Ipê', 'Consumidor', 'Conhecimento', '2026-08-28', 'em_andamento', advId);
 
-  const insertTask = db.prepare(
-    `INSERT INTO tasks (title, due_date, done, user_id, process_id) VALUES (?, ?, ?, ?, ?)`
-  );
-  insertTask.run('Elaborar contestação — Proc. 5002210-05', '2026-08-06', 0, advId, 4);
-  insertTask.run('Revisar cálculo de execução — Cond. Vista Alegre', '2026-08-07', 0, socioId, 3);
-  insertTask.run('Enviar procuração para assinatura', '2026-08-08', 0, advId, null);
-  insertTask.run('Protocolar recurso — Roberto Guimarães', '2026-08-05', 1, advId, 2);
-
-  const insertEvent = db.prepare(`
-    INSERT INTO agenda_events (title, detail, event_date, event_time, user_id, process_id)
-    VALUES (?, ?, ?, ?, ?, ?)
+  // Quadro Kanban de Agenda & Tarefas: dados de exemplo ja inseridos direto no
+  // formato novo (type/priority/status/location), sem passar pela tabela legada
+  // "tasks" — essa tabela fica apenas para compatibilidade com bancos antigos.
+  const insertCard = db.prepare(`
+    INSERT INTO agenda_events (title, detail, event_date, event_time, user_id, process_id, type, priority, status, location)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertEvent.run('Audiência de instrução', 'Fórum Lafayette · Sala 4', '2026-08-06', '09:00', socioId, 1);
-  insertEvent.run('Reunião com cliente', 'Cond. Vista Alegre · presencial', '2026-08-06', '11:30', socioId, 3);
-  insertEvent.run('Protocolo de contestação', 'Prazo final às 23h59', '2026-08-06', '14:00', advId, 4);
+  insertCard.run('Audiência de instrução', '', '2026-08-06', '09:00', socioId, 1, 'audiencia', 'alta', 'a_fazer', 'Fórum Lafayette · Sala 4');
+  insertCard.run('Reunião com cliente', 'Reunião presencial para alinhar estratégia processual.', '2026-08-06', '11:30', socioId, 3, 'reuniao', 'media', 'a_fazer', 'Cond. Vista Alegre');
+  insertCard.run('Protocolo de contestação', 'Prazo final às 23h59.', '2026-08-06', '14:00', advId, 4, 'prazo', 'urgente', 'a_fazer', '');
+  insertCard.run('Elaborar contestação — Proc. 5002210-05', '', '2026-08-06', '', advId, 4, 'tarefa', 'alta', 'a_fazer', '');
+  insertCard.run('Revisar cálculo de execução — Cond. Vista Alegre', '', '2026-08-07', '', socioId, 3, 'tarefa', 'media', 'a_fazer', '');
+  insertCard.run('Enviar procuração para assinatura', '', '2026-08-08', '', advId, null, 'tarefa', 'media', 'a_fazer', '');
+  insertCard.run('Protocolar recurso — Roberto Guimarães', '', '2026-08-05', '', advId, 2, 'tarefa', 'baixa', 'concluido', '');
 
   const insertInvoice = db.prepare(
     `INSERT INTO invoices (client_id, amount_cents, due_date, status) VALUES (?, ?, ?, ?)`

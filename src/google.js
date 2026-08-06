@@ -14,6 +14,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
 
@@ -495,6 +496,90 @@ async function exportPdf(userId, fileId) {
   return Buffer.from(arrayBuffer);
 }
 
+// ---------- Google Agenda (Calendar) ----------
+// O escritorio usa uma unica agenda compartilhada (a da conta Google conectada
+// pelo socio), independente de qual usuario do sistema criou o card no quadro
+// Kanban. getPrimaryConnectedUserId() resolve qual usuario do sistema tem essa
+// conta conectada, para ser usado nas chamadas de Calendar API abaixo.
+function getPrimaryConnectedUserId() {
+  const row = db.prepare(`SELECT user_id FROM oauth_tokens WHERE provider = 'google' ORDER BY id ASC LIMIT 1`).get();
+  return row ? row.user_id : null;
+}
+
+// Soma "n" dias a uma data YYYY-MM-DD sem sofrer com fuso horario (ancora em UTC
+// porque so nos importa o componente de calendario, nao o horario do dia).
+function addDaysISO(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Monta o corpo do evento para a Calendar API. Eventos com horario definido
+// usam dateTime + timeZone (America/Sao_Paulo) mantendo o horario "de parede"
+// tal como digitado, sem conversao para UTC (evita bugs de fuso). Eventos sem
+// horario (tarefas) viram eventos de dia inteiro. Lembrete por e-mail fixo em
+// 1 dia de antecedencia, independente da configuracao padrao da conta.
+function buildCalendarEventBody({ title, detail, date, time, location, allDay }) {
+  const body = {
+    summary: title,
+    description: detail || '',
+    location: location || '',
+    reminders: { useDefault: false, overrides: [{ method: 'email', minutes: 24 * 60 }] },
+  };
+  if (allDay || !time) {
+    body.start = { date };
+    body.end = { date: addDaysISO(date, 1) }; // eventos de dia inteiro usam data final exclusiva
+  } else {
+    const [h, m] = time.split(':').map(Number);
+    let endH = h + 1;
+    let endDate = date;
+    if (endH >= 24) { endH -= 24; endDate = addDaysISO(date, 1); }
+    const endTime = `${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    body.start = { dateTime: `${date}T${time}:00`, timeZone: 'America/Sao_Paulo' };
+    body.end = { dateTime: `${endDate}T${endTime}:00`, timeZone: 'America/Sao_Paulo' };
+  }
+  return body;
+}
+
+async function createCalendarEvent(userId, { title, detail, date, time, location, allDay }) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildCalendarEventBody({ title, detail, date, time, location, allDay })),
+  });
+  if (!res.ok) throw new Error('calendar_create_failed: ' + res.status + ' ' + (await res.text()));
+  const data = await res.json();
+  return data.id;
+}
+
+async function updateCalendarEvent(userId, eventId, { title, detail, date, time, location, allDay }) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}?sendUpdates=none`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildCalendarEventBody({ title, detail, date, time, location, allDay })),
+  });
+  if (!res.ok) throw new Error('calendar_update_failed: ' + res.status + ' ' + (await res.text()));
+  return true;
+}
+
+async function deleteCalendarEvent(userId, eventId) {
+  const accessToken = await getValidAccessToken(userId);
+  if (!accessToken) throw new Error('google_nao_conectado');
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}?sendUpdates=none`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  // 404/410 = evento ja nao existe no Google Agenda (ex.: apagado manualmente); nao e erro.
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error('calendar_delete_failed: ' + res.status + ' ' + (await res.text()));
+  }
+  return true;
+}
+
 module.exports = {
   isConfigured,
   buildAuthUrl,
@@ -508,4 +593,8 @@ module.exports = {
   searchEmails,
   generateDocument,
   exportPdf,
+  getPrimaryConnectedUserId,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
 };
