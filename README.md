@@ -1,4 +1,4 @@
-# Sistema Jurídico — Serafim Advogados
+# Mattheo — Serafim Advogados
 
 Aplicação web multiusuário com login individual e permissões por papel (sócio, advogado, estagiário). Sem dependências externas (usa apenas módulos nativos do Node.js e SQLite embutido), o que simplifica o deploy e reduz superfície de ataque.
 
