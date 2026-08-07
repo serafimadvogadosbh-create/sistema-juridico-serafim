@@ -116,7 +116,10 @@
       { v: d.deadlineSoon, l: 'Prazos nos próximos 5 dias' },
       { v: d.tasksToday, l: 'Tarefas pendentes' },
     ];
-    if (d.faturamentoMes !== null) cards.push({ v: fmtMoney(d.faturamentoMes), l: 'Faturamento do mês' });
+    if (d.faturamentoMes !== null) {
+      cards.push({ v: fmtMoney(d.faturamentoMes.recebido), l: 'Recebido (mês)' });
+      cards.push({ v: fmtMoney(d.faturamentoMes.aReceber), l: 'A receber (mês)' });
+    }
     document.getElementById('kpiGrid').innerHTML = cards.map(c => `
       <div class="kpi-card"><div class="kpi-value">${c.v}</div><div class="kpi-label">${c.l}</div></div>
     `).join('');
@@ -446,8 +449,8 @@
       const [d, dc] = await Promise.all([api('/api/financeiro'), api('/api/contracts')]);
       el.innerHTML = `
         <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px;">
-          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.recebido)}</div><div class="kpi-label">Recebido</div></div>
-          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.aReceber)}</div><div class="kpi-label">A receber</div></div>
+          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.recebido)}</div><div class="kpi-label">Recebido (mês)</div></div>
+          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.aReceber)}</div><div class="kpi-label">A receber (mês)</div></div>
           <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.atrasado)}</div><div class="kpi-label">Em atraso</div></div>
         </div>
         <h3 style="margin:0 0 10px;font-size:15px;">Recebimentos por mês</h3>
