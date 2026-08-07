@@ -12,7 +12,14 @@
     prazo_proximo: ['amber', 'Prazo próximo'],
     urgente: ['red', 'Urgente'],
     concluido: ['gray', 'Concluído'],
+    aberta: ['blue', 'Aberta'],
+    paga: ['green', 'Paga'],
+    atrasada: ['red', 'Atrasada'],
+    ativo: ['blue', 'Ativo'],
+    quitado: ['green', 'Quitado'],
+    cancelado: ['gray', 'Cancelado'],
   };
+  const FEE_TYPE_LABEL = { fixo: 'Fixo único', parcelado: 'Parcelado', mensal: 'Mensal', exito: 'Êxito' };
 
   let ME = null;
 
@@ -429,16 +436,59 @@
   async function loadFinanceiro() {
     const el = document.getElementById('financeiroBody');
     try {
-      const d = await api('/api/financeiro');
+      const [d, dc] = await Promise.all([api('/api/financeiro'), api('/api/contracts')]);
       el.innerHTML = `
         <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px;">
-          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.receitaMes)}</div><div class="kpi-label">Receita total</div></div>
+          <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.recebido)}</div><div class="kpi-label">Recebido</div></div>
           <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.aReceber)}</div><div class="kpi-label">A receber</div></div>
           <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.atrasado)}</div><div class="kpi-label">Em atraso</div></div>
         </div>
-        <div class="card"><table><thead><tr><th>Cliente</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr></thead>
-        <tbody>${d.faturas.map(f => `<tr><td>${f.client_name}</td><td>${fmtMoney(f.amount_cents)}</td><td>${fmtDate(f.due_date)}</td><td>${tag(f.status === 'atrasada' ? 'urgente' : 'em_andamento')}</td></tr>`).join('')}</tbody></table></div>
+        <h3 style="margin:0 0 10px;font-size:15px;">Contratos</h3>
+        <div class="card" style="margin-bottom:22px;"><table><thead><tr>
+          <th>Cliente</th><th>Título</th><th>Tipo</th><th>Valor total</th><th>Parcelas pagas</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="contractsTable">${dc.contracts.length ? dc.contracts.map(c => `
+          <tr>
+            <td>${escapeHtml(c.client_name)}</td>
+            <td>${escapeHtml(c.title)}</td>
+            <td>${FEE_TYPE_LABEL[c.fee_type] || c.fee_type}</td>
+            <td>${fmtMoney(c.total_amount_cents)}</td>
+            <td>${c.paid_count}/${c.installments_count} (${fmtMoney(c.paid_cents)})</td>
+            <td>${tag(c.status)}</td>
+            <td><button class="btn-ghost delContractBtn" data-id="${c.id}" style="font-size:11px;padding:5px 10px;">Excluir</button></td>
+          </tr>
+        `).join('') : '<tr><td colspan="7" style="color:var(--gray-600);">Nenhum contrato cadastrado.</td></tr>'}</tbody></table></div>
+        <h3 style="margin:0 0 10px;font-size:15px;">Faturas / Parcelas</h3>
+        <div class="card"><table><thead><tr><th>Cliente</th><th>Contrato</th><th>Valor</th><th>Vencimento</th><th>Status</th><th></th></tr></thead>
+        <tbody id="invoicesTable">${d.faturas.length ? d.faturas.map(f => `
+          <tr>
+            <td>${escapeHtml(f.client_name)}</td>
+            <td>${f.contract_title ? escapeHtml(f.contract_title) : '<span style="color:var(--gray-600);">Avulsa</span>'}</td>
+            <td>${fmtMoney(f.amount_cents)}</td>
+            <td>${fmtDate(f.due_date)}</td>
+            <td>${tag(f.status)}</td>
+            <td><button class="btn-ghost toggleInvoiceBtn" data-id="${f.id}" data-status="${f.status}" style="font-size:11px;padding:5px 10px;">${f.status === 'paga' ? 'Desfazer' : 'Marcar paga'}</button></td>
+          </tr>
+        `).join('') : '<tr><td colspan="6" style="color:var(--gray-600);">Nenhuma fatura.</td></tr>'}</tbody></table></div>
       `;
+      document.querySelectorAll('.toggleInvoiceBtn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const novoStatus = btn.dataset.status === 'paga' ? 'aberta' : 'paga';
+          await api(`/api/invoices/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: novoStatus }) });
+          loadFinanceiro();
+        });
+      });
+      document.querySelectorAll('.delContractBtn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Excluir este contrato e todas as parcelas em aberto? Só é possível se nenhuma parcela já tiver sido paga.')) return;
+          try {
+            await api(`/api/contracts/${btn.dataset.id}`, { method: 'DELETE' });
+            loadFinanceiro();
+          } catch (e) {
+            alert(e.message === 'contrato_com_parcelas_pagas' ? 'Não é possível excluir: este contrato já tem parcela(s) paga(s).' : 'Não foi possível excluir.');
+          }
+        });
+      });
     } catch (e) {
       el.innerHTML = '<div class="locked-msg"><b>Acesso restrito</b>O módulo Financeiro é visível apenas para sócios.</div>';
     }
@@ -522,6 +572,65 @@
       });
       closeModal();
       loadView('clientes');
+    };
+  }
+
+  async function openContractModal() {
+    const [clientes, processos] = await Promise.all([
+      api('/api/clientes').then(d => d.clientes).catch(() => []),
+      api('/api/processos').then(d => d.processos).catch(() => []),
+    ]);
+    modalBox.innerHTML = `
+      <h3>Novo contrato</h3>
+      <div class="field"><label>Cliente</label><select id="mClient">${clientes.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Processo (opcional)</label><select id="mProcess"><option value="">—</option>${processos.map(p => `<option value="${p.id}">${escapeHtml(p.cnj_number)} — ${escapeHtml(p.client_name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Título</label><input id="mTitle" type="text" placeholder="Ex.: Honorários — Ação de Cobrança"></div>
+      <div class="field"><label>Tipo de honorário</label><select id="mFeeType">
+        <option value="fixo">Fixo único</option>
+        <option value="parcelado" selected>Parcelado</option>
+        <option value="mensal">Mensal</option>
+        <option value="exito">Êxito</option>
+      </select></div>
+      <div class="field"><label>Valor total (R$)</label><input id="mValor" type="number" min="0" step="0.01" placeholder="0,00"></div>
+      <div class="field"><label>Número de parcelas</label><input id="mParcelas" type="number" min="1" step="1" value="1"></div>
+      <div class="field"><label>Data da 1ª parcela</label><input id="mPrimeiraData" type="date"></div>
+      <div class="field"><label>Observações (opcional)</label><textarea id="mNotes" rows="2" style="width:100%;border:1px solid var(--gray-200);border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;"></textarea></div>
+      <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button></div>
+      <div id="mErr" style="color:var(--red);font-size:12.5px;margin-top:8px;"></div>
+    `;
+    backdrop.classList.add('active');
+    document.getElementById('mCancel').onclick = closeModal;
+    document.getElementById('mSave').onclick = async () => {
+      const client_id = Number(document.getElementById('mClient').value);
+      const process_id = document.getElementById('mProcess').value || null;
+      const title = document.getElementById('mTitle').value.trim();
+      const fee_type = document.getElementById('mFeeType').value;
+      const valor = parseFloat(document.getElementById('mValor').value.replace(',', '.'));
+      const installments_count = Number(document.getElementById('mParcelas').value) || 1;
+      const first_due_date = document.getElementById('mPrimeiraData').value;
+      const notes = document.getElementById('mNotes').value.trim();
+      const errEl = document.getElementById('mErr');
+      if (!client_id || !title || !valor || valor <= 0 || !first_due_date || installments_count < 1) {
+        errEl.textContent = 'Preencha cliente, título, valor total (maior que zero) e a data da 1ª parcela.';
+        return;
+      }
+      const btn = document.getElementById('mSave');
+      btn.disabled = true;
+      try {
+        await api('/api/contracts', {
+          method: 'POST',
+          body: JSON.stringify({
+            client_id, process_id, title, fee_type,
+            total_amount_cents: Math.round(valor * 100),
+            installments_count, first_due_date, notes,
+          }),
+        });
+        closeModal();
+        loadFinanceiro();
+      } catch (e) {
+        errEl.textContent = 'Não foi possível salvar o contrato. Confira os dados e tente novamente.';
+        btn.disabled = false;
+      }
     };
   }
 
@@ -915,6 +1024,7 @@
       document.getElementById('btnNovoCard').addEventListener('click', () => openCardModal(null));
       document.getElementById('btnNovoProcesso').addEventListener('click', openProcessModal);
       document.getElementById('btnNovoCliente').addEventListener('click', openClientModal);
+      document.getElementById('btnNovoContrato').addEventListener('click', openContractModal);
       document.getElementById('btnChangePassword').addEventListener('click', openChangePasswordModal);
 
       document.getElementById('btnVerArquivados').addEventListener('click', () => {
