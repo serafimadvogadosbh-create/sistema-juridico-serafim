@@ -564,16 +564,16 @@
   function openChangePasswordModal() {
     modalBox.innerHTML = `
       <h3>Trocar senha</h3>
-      <div class="field"><label>Senha atual</label><input id="mCur" type="password"></div>
-      <div class="field"><label>Nova senha</label><input id="mNew" type="password" placeholder="mínimo 8 caracteres"></div>
+      <div class="field"><label>Senha atual</label><input id="mCur" type="password" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      <div class="field"><label>Nova senha</label><input id="mNew" type="password" placeholder="mínimo 8 caracteres" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
       <div class="modal-actions"><button class="btn-ghost" id="mCancel">Cancelar</button><button class="btn-primary" id="mSave">Salvar</button></div>
       <div id="mErr" style="color:var(--red);font-size:12.5px;margin-top:8px;"></div>
     `;
     backdrop.classList.add('active');
     document.getElementById('mCancel').onclick = closeModal;
     document.getElementById('mSave').onclick = async () => {
-      const currentPassword = document.getElementById('mCur').value;
-      const newPassword = document.getElementById('mNew').value;
+      const currentPassword = document.getElementById('mCur').value.trim();
+      const newPassword = document.getElementById('mNew').value.trim();
       try {
         await api('/api/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
         closeModal();
