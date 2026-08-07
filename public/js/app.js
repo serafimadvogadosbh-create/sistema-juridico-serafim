@@ -20,6 +20,13 @@
     cancelado: ['gray', 'Cancelado'],
   };
   const FEE_TYPE_LABEL = { fixo: 'Fixo único', parcelado: 'Parcelado', mensal: 'Mensal', exito: 'Êxito' };
+  const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  function fmtMesAno(mes) {
+    // mes no formato 'YYYY-MM' (vindo de strftime do SQLite)
+    const [y, m] = String(mes || '').split('-');
+    const idx = Number(m) - 1;
+    return MONTH_NAMES[idx] ? `${MONTH_NAMES[idx]}/${y}` : mes;
+  }
 
   let ME = null;
 
@@ -443,6 +450,18 @@
           <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.aReceber)}</div><div class="kpi-label">A receber</div></div>
           <div class="kpi-card"><div class="kpi-value">${fmtMoney(d.atrasado)}</div><div class="kpi-label">Em atraso</div></div>
         </div>
+        <h3 style="margin:0 0 10px;font-size:15px;">Recebimentos por mês</h3>
+        <div class="card" style="margin-bottom:22px;"><table><thead><tr>
+          <th>Mês</th><th>Recebido</th><th>A receber</th><th>Em atraso</th>
+        </tr></thead>
+        <tbody>${d.porMes && d.porMes.length ? d.porMes.map(m => `
+          <tr>
+            <td>${fmtMesAno(m.mes)}</td>
+            <td>${fmtMoney(m.recebido)}</td>
+            <td>${fmtMoney(m.aReceber)}</td>
+            <td>${m.atrasado > 0 ? `<span style="color:var(--red);">${fmtMoney(m.atrasado)}</span>` : fmtMoney(m.atrasado)}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" style="color:var(--gray-600);">Nenhum lançamento com vencimento definido.</td></tr>'}</tbody></table></div>
         <h3 style="margin:0 0 10px;font-size:15px;">Contratos</h3>
         <div class="card" style="margin-bottom:22px;"><table><thead><tr>
           <th>Cliente</th><th>Título</th><th>Tipo</th><th>Valor total</th><th>Parcelas pagas</th><th>Status</th><th></th>
