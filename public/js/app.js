@@ -464,7 +464,14 @@
             <td>${fmtMoney(m.aReceber)}</td>
             <td>${m.atrasado > 0 ? `<span style="color:var(--red);">${fmtMoney(m.atrasado)}</span>` : fmtMoney(m.atrasado)}</td>
           </tr>
-        `).join('') : '<tr><td colspan="4" style="color:var(--gray-600);">Nenhum lançamento com vencimento definido.</td></tr>'}</tbody></table></div>
+        `).join('') : '<tr><td colspan="4" style="color:var(--gray-600);">Nenhum lançamento com vencimento definido.</td></tr>'}${d.totalGeral ? `
+          <tr style="font-weight:700;background:var(--gray-100,#f4f6f8);border-top:2px solid var(--gray-200);">
+            <td>Total geral (desde ${fmtDate(d.cutoffDate)}/${d.cutoffDate.slice(0,4)})</td>
+            <td>${fmtMoney(d.totalGeral.recebido)}</td>
+            <td>${fmtMoney(d.totalGeral.aReceber)}</td>
+            <td>${d.totalGeral.atrasado > 0 ? `<span style="color:var(--red);">${fmtMoney(d.totalGeral.atrasado)}</span>` : fmtMoney(d.totalGeral.atrasado)}</td>
+          </tr>
+        ` : ''}</tbody></table></div>
         <h3 style="margin:0 0 10px;font-size:15px;">Contratos</h3>
         <div class="card" style="margin-bottom:22px;"><table><thead><tr>
           <th>Cliente</th><th>Título</th><th>Tipo</th><th>Valor total</th><th>Parcelas pagas</th><th>Status</th><th></th>
