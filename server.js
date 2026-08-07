@@ -505,17 +505,30 @@ async function handleApi(req, res, pathname, method) {
     `).all();
     // Recebido/a receber/em atraso agrupados por mes de vencimento (strftime %Y-%m),
     // para o usuario acompanhar o fluxo mes a mes (agosto, setembro, outubro...).
+    // A partir de 01/08/2026 (data de corte combinada) — parcelas anteriores a essa
+    // data (dados legados/teste) ficam de fora tanto da tabela mensal quanto do total geral.
+    const CUTOFF_DATE = '2026-08-01';
     const porMes = db.prepare(`
       SELECT strftime('%Y-%m', due_date) as mes,
         COALESCE(SUM(CASE WHEN status = 'paga' THEN amount_cents ELSE 0 END), 0) as recebido,
         COALESCE(SUM(CASE WHEN status != 'paga' AND due_date >= date('now') THEN amount_cents ELSE 0 END), 0) as aReceber,
         COALESCE(SUM(CASE WHEN status != 'paga' AND due_date < date('now') THEN amount_cents ELSE 0 END), 0) as atrasado
       FROM invoices
-      WHERE due_date IS NOT NULL
+      WHERE due_date IS NOT NULL AND due_date >= ?
       GROUP BY mes
       ORDER BY mes ASC
-    `).all();
-    return sendJson(res, 200, { recebido, aReceber, atrasado, faturas, porMes });
+    `).all(CUTOFF_DATE);
+    // Total geral: soma de tudo a partir da data de corte (nao e mais o total
+    // acumulado desde sempre, e sim desde 01/08/2026), exibido ao final da tabela.
+    const totalGeral = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN status = 'paga' THEN amount_cents ELSE 0 END), 0) as recebido,
+        COALESCE(SUM(CASE WHEN status != 'paga' AND due_date >= date('now') THEN amount_cents ELSE 0 END), 0) as aReceber,
+        COALESCE(SUM(CASE WHEN status != 'paga' AND due_date < date('now') THEN amount_cents ELSE 0 END), 0) as atrasado
+      FROM invoices
+      WHERE due_date IS NOT NULL AND due_date >= ?
+    `).get(CUTOFF_DATE);
+    return sendJson(res, 200, { recebido, aReceber, atrasado, faturas, porMes, totalGeral, cutoffDate: CUTOFF_DATE });
   }
 
   // CONTRATOS (honorarios) — cadastro manual, com geracao automatica das parcelas
