@@ -79,6 +79,20 @@ function init() {
       status TEXT NOT NULL DEFAULT 'aberta'
     );
 
+    CREATE TABLE IF NOT EXISTS contracts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      process_id INTEGER REFERENCES processes(id),
+      title TEXT NOT NULL,
+      fee_type TEXT NOT NULL DEFAULT 'parcelado' CHECK(fee_type IN ('fixo','parcelado','mensal','exito')),
+      total_amount_cents INTEGER NOT NULL,
+      installments_count INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'ativo' CHECK(status IN ('ativo','quitado','cancelado')),
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS timesheet_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id),
@@ -177,6 +191,13 @@ function migrate() {
     for (const t of oldTasks) {
       insertMigrated.run(t.title, t.due_date || today, t.user_id, t.process_id, t.done ? 'concluido' : 'a_fazer');
     }
+  }
+
+  // Contratos com parcelas: liga cada fatura/parcela ao contrato que a gerou.
+  // Faturas antigas (avulsas, sem contrato) continuam funcionando com contract_id nulo.
+  const invoiceCols = db.prepare(`PRAGMA table_info(invoices)`).all().map((c) => c.name);
+  if (!invoiceCols.includes('contract_id')) {
+    db.exec(`ALTER TABLE invoices ADD COLUMN contract_id INTEGER REFERENCES contracts(id)`);
   }
 }
 
