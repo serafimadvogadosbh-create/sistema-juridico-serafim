@@ -463,17 +463,107 @@ async function handleApi(req, res, pathname, method) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // Faturas/parcelas: status guardado no banco normalmente e 'aberta' ou 'paga'.
+  // "Atrasada" e calculado na hora (aberta + vencimento no passado), sem precisar de
+  // job agendado — mas tambem aceitamos o literal 'atrasada' gravado por dados antigos.
+  const OVERDUE_CASE = `CASE WHEN i.status != 'paga' AND i.due_date < date('now') THEN 'atrasada' WHEN i.status = 'atrasada' THEN 'aberta' ELSE i.status END`;
+
   if (pathname === '/api/financeiro' && method === 'GET') {
     if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
-    const receitaMes = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices`).get().c;
-    const aReceber = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status = 'aberta'`).get().c;
-    const atrasado = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status = 'atrasada'`).get().c;
+    const recebido = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status = 'paga'`).get().c;
+    const aReceber = db.prepare(`
+      SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status != 'paga' AND due_date >= date('now')
+    `).get().c;
+    const atrasado = db.prepare(`
+      SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status != 'paga' AND due_date < date('now')
+    `).get().c;
     const faturas = db.prepare(`
-      SELECT i.id, c.name as client_name, i.amount_cents, i.due_date, i.status
+      SELECT i.id, c.name as client_name, ct.title as contract_title, i.amount_cents, i.due_date,
+             ${OVERDUE_CASE} as status
       FROM invoices i JOIN clients c ON c.id = i.client_id
+      LEFT JOIN contracts ct ON ct.id = i.contract_id
       ORDER BY i.due_date ASC
     `).all();
-    return sendJson(res, 200, { receitaMes, aReceber, atrasado, faturas });
+    return sendJson(res, 200, { recebido, aReceber, atrasado, faturas });
+  }
+
+  // CONTRATOS (honorarios) — cadastro manual, com geracao automatica das parcelas
+  if (pathname === '/api/contracts' && method === 'GET') {
+    if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
+    const rows = db.prepare(`
+      SELECT ct.id, ct.title, ct.fee_type, ct.total_amount_cents, ct.installments_count, ct.status,
+             ct.notes, ct.created_at, c.name as client_name, c.id as client_id,
+             p.cnj_number as process_cnj,
+             (SELECT COUNT(*) FROM invoices i WHERE i.contract_id = ct.id AND i.status = 'paga') as paid_count,
+             (SELECT COALESCE(SUM(amount_cents),0) FROM invoices i WHERE i.contract_id = ct.id AND i.status = 'paga') as paid_cents
+      FROM contracts ct
+      JOIN clients c ON c.id = ct.client_id
+      LEFT JOIN processes p ON p.id = ct.process_id
+      ORDER BY ct.created_at DESC
+    `).all();
+    return sendJson(res, 200, { contracts: rows });
+  }
+
+  if (pathname === '/api/contracts' && method === 'POST') {
+    if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const { client_id, process_id, title, fee_type, total_amount_cents, installments_count, first_due_date, notes } = body || {};
+    const n = Number(installments_count) || 1;
+    if (!client_id || !title || !total_amount_cents || total_amount_cents <= 0 || !first_due_date || n < 1) {
+      return sendJson(res, 400, { error: 'dados_invalidos' });
+    }
+    const validFee = ['fixo', 'parcelado', 'mensal', 'exito'].includes(fee_type) ? fee_type : 'parcelado';
+    const info = db.prepare(`
+      INSERT INTO contracts (client_id, process_id, title, fee_type, total_amount_cents, installments_count, notes, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(client_id, process_id || null, title, validFee, Math.round(total_amount_cents), n, notes || '', session.id);
+    const contractId = Number(info.lastInsertRowid);
+
+    // Divide o valor total em N parcelas iguais; a ultima absorve o resto de
+    // arredondamento (em centavos) para o somatorio bater certinho com o total.
+    const base = Math.floor(total_amount_cents / n);
+    const resto = total_amount_cents - base * n;
+    const insertInvoice = db.prepare(`INSERT INTO invoices (client_id, amount_cents, due_date, status, contract_id) VALUES (?, ?, ?, 'aberta', ?)`);
+    const [y0, m0, d0] = first_due_date.split('-').map(Number);
+    for (let i = 0; i < n; i++) {
+      const amount = base + (i === n - 1 ? resto : 0);
+      const dt = new Date(Date.UTC(y0, m0 - 1 + i, d0));
+      const dueDate = dt.toISOString().slice(0, 10);
+      insertInvoice.run(client_id, amount, dueDate, contractId);
+    }
+    return sendJson(res, 201, { id: contractId });
+  }
+
+  const contractDeleteMatch = pathname.match(/^\/api\/contracts\/(\d+)$/);
+  if (contractDeleteMatch && method === 'DELETE') {
+    if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(contractDeleteMatch[1]);
+    const paidCount = db.prepare(`SELECT COUNT(*) c FROM invoices WHERE contract_id = ? AND status = 'paga'`).get(id).c;
+    if (paidCount > 0) return sendJson(res, 409, { error: 'contrato_com_parcelas_pagas' });
+    db.prepare('DELETE FROM invoices WHERE contract_id = ?').run(id);
+    db.prepare('DELETE FROM contracts WHERE id = ?').run(id);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // Marca/desmarca uma parcela (fatura) como paga
+  const invoiceStatusMatch = pathname.match(/^\/api\/invoices\/(\d+)\/status$/);
+  if (invoiceStatusMatch && method === 'PATCH') {
+    if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
+    const id = Number(invoiceStatusMatch[1]);
+    let body;
+    try { body = await readJsonBody(req); } catch { return sendJson(res, 400, { error: 'json_invalido' }); }
+    const status = body && body.status === 'paga' ? 'paga' : 'aberta';
+    const info = db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, id);
+    if (info.changes === 0) return sendJson(res, 404, { error: 'nao_encontrado' });
+    // Se todas as parcelas de um contrato estiverem pagas, marca o contrato como quitado.
+    const row = db.prepare('SELECT contract_id FROM invoices WHERE id = ?').get(id);
+    if (row && row.contract_id) {
+      const pend = db.prepare(`SELECT COUNT(*) c FROM invoices WHERE contract_id = ? AND status != 'paga'`).get(row.contract_id).c;
+      db.prepare(`UPDATE contracts SET status = ? WHERE id = ? AND status != 'cancelado'`)
+        .run(pend === 0 ? 'quitado' : 'ativo', row.contract_id);
+    }
+    return sendJson(res, 200, { ok: true });
   }
 
   if (pathname === '/api/timesheet' && method === 'GET') {
