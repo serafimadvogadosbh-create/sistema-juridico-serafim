@@ -484,7 +484,19 @@ async function handleApi(req, res, pathname, method) {
       LEFT JOIN contracts ct ON ct.id = i.contract_id
       ORDER BY i.due_date ASC
     `).all();
-    return sendJson(res, 200, { recebido, aReceber, atrasado, faturas });
+    // Recebido/a receber/em atraso agrupados por mes de vencimento (strftime %Y-%m),
+    // para o usuario acompanhar o fluxo mes a mes (agosto, setembro, outubro...).
+    const porMes = db.prepare(`
+      SELECT strftime('%Y-%m', due_date) as mes,
+        COALESCE(SUM(CASE WHEN status = 'paga' THEN amount_cents ELSE 0 END), 0) as recebido,
+        COALESCE(SUM(CASE WHEN status != 'paga' AND due_date >= date('now') THEN amount_cents ELSE 0 END), 0) as aReceber,
+        COALESCE(SUM(CASE WHEN status != 'paga' AND due_date < date('now') THEN amount_cents ELSE 0 END), 0) as atrasado
+      FROM invoices
+      WHERE due_date IS NOT NULL
+      GROUP BY mes
+      ORDER BY mes ASC
+    `).all();
+    return sendJson(res, 200, { recebido, aReceber, atrasado, faturas, porMes });
   }
 
   // CONTRATOS (honorarios) — cadastro manual, com geracao automatica das parcelas
