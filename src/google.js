@@ -286,7 +286,7 @@ async function createDocInFolder(accessToken, title, paragraphs, folderId) {
 // removidas e precisarem ser recriadas do zero. Em producao, os modelos
 // "de verdade" sao os documentos com identidade visual do escritorio
 // (logotipo, faixas coloridas) enviados manualmente para a pasta "Modelos -
-// Sistema Jurídico" no Drive e referenciados via app_settings — este texto
+// Mattheo" no Drive e referenciados via app_settings — este texto
 // replica a mesma estrutura/clausulas e a mesma formatacao (justificado +
 // negrito nos topicos), so que sem o papel timbrado.
 const TEMPLATE_PROCURACAO_PARAGRAPHS = [
@@ -404,7 +404,7 @@ const TEMPLATE_CONTRATO_PARAGRAPHS = [
 async function ensureTemplates(userId) {
   const accessToken = await getValidAccessToken(userId);
   if (!accessToken) throw new Error('google_nao_conectado');
-  const modelosFolderId = await ensureFolder(accessToken, 'modelos_folder_id', 'Modelos - Sistema Jurídico');
+  const modelosFolderId = await ensureFolder(accessToken, 'modelos_folder_id', 'Modelos - Mattheo');
 
   let procuracaoId = getSetting('template_procuracao_id');
   if (!procuracaoId) {
@@ -436,7 +436,7 @@ async function generateDocument(userId, { tipo, cliente, advogadoNome, extra = {
   const accessToken = await getValidAccessToken(userId);
   if (!accessToken) throw new Error('google_nao_conectado');
   const { procuracaoId, contratoId, modelosFolderId } = await ensureTemplates(userId);
-  const destFolderId = await ensureFolder(accessToken, 'documentos_gerados_folder_id', 'Documentos Gerados - Sistema Jurídico');
+  const destFolderId = await ensureFolder(accessToken, 'documentos_gerados_folder_id', 'Documentos Gerados - Mattheo');
 
   const isContrato = tipo === 'contrato';
   const templateId = isContrato ? contratoId : procuracaoId;
