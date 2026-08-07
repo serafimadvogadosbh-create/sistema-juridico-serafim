@@ -182,10 +182,20 @@ async function handleApi(req, res, pathname, method) {
       ? db.prepare(`SELECT COUNT(*) c FROM processes WHERE next_deadline BETWEEN date('now') AND date('now','+5 day')`).get().c
       : db.prepare(`SELECT COUNT(*) c FROM processes WHERE next_deadline BETWEEN date('now') AND date('now','+5 day') AND responsible_id = ?`).get(session.id).c;
     const tasksToday = db.prepare(`SELECT COUNT(*) c FROM agenda_events WHERE user_id = ? AND type = 'tarefa' AND status != 'concluido'`).get(session.id).c;
+    // Faturamento do mes: recebido e a receber do MES CORRENTE apenas (nao o total
+    // geral acumulado) — reseta automaticamente a cada novo mes, pois o filtro de
+    // data e sempre relativo a data atual.
     let faturamentoMes = null;
     if (perms.canAccessFinanceiro(session.role)) {
-      const row = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE due_date >= date('now','start of month')`).get();
-      faturamentoMes = row.c;
+      const recebidoMes = db.prepare(`
+        SELECT COALESCE(SUM(amount_cents),0) c FROM invoices
+        WHERE status = 'paga' AND due_date >= date('now','start of month') AND due_date < date('now','start of month','+1 month')
+      `).get().c;
+      const aReceberMes = db.prepare(`
+        SELECT COALESCE(SUM(amount_cents),0) c FROM invoices
+        WHERE status != 'paga' AND due_date >= date('now','start of month') AND due_date < date('now','start of month','+1 month')
+      `).get().c;
+      faturamentoMes = { recebido: recebidoMes, aReceber: aReceberMes };
     }
     const recentProcesses = db.prepare(`
       SELECT p.cnj_number, c.name as client_name, p.phase, p.next_deadline, p.status
@@ -470,9 +480,18 @@ async function handleApi(req, res, pathname, method) {
 
   if (pathname === '/api/financeiro' && method === 'GET') {
     if (!perms.canAccessFinanceiro(session.role)) return sendJson(res, 403, { error: 'sem_permissao' });
-    const recebido = db.prepare(`SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status = 'paga'`).get().c;
+    // Recebido/A receber dos cards do topo sao sempre do MES CORRENTE (nao o total
+    // geral acumulado) — proximo mes esses numeros voltam a zero automaticamente,
+    // pois o filtro e relativo a data('now'). "Em atraso" continua valendo para
+    // qualquer mes, ja que uma parcela vencida nao deixa de ser urgente so porque
+    // o mes virou.
+    const recebido = db.prepare(`
+      SELECT COALESCE(SUM(amount_cents),0) c FROM invoices
+      WHERE status = 'paga' AND due_date >= date('now','start of month') AND due_date < date('now','start of month','+1 month')
+    `).get().c;
     const aReceber = db.prepare(`
-      SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status != 'paga' AND due_date >= date('now')
+      SELECT COALESCE(SUM(amount_cents),0) c FROM invoices
+      WHERE status != 'paga' AND due_date >= date('now','start of month') AND due_date < date('now','start of month','+1 month')
     `).get().c;
     const atrasado = db.prepare(`
       SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status != 'paga' AND due_date < date('now')
