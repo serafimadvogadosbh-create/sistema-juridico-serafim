@@ -55,7 +55,7 @@ body.app{display:flex;min-height:100vh;}
 .page-head h2{font-size:22px;color:var(--navy-900);}
 .page-head p{color:var(--gray-600);font-size:13px;margin-top:3px;}
 
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px;}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:22px;}
 .kpi-card{background:var(--white);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow);border:1px solid var(--gray-200);}
 .kpi-value{font-size:26px;font-weight:700;color:var(--navy-900);margin-top:4px;}
 .kpi-label{font-size:12.5px;color:var(--gray-600);margin-top:2px;}
